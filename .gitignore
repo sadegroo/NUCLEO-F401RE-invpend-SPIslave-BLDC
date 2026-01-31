@@ -1,0 +1,59 @@
+# =========================
+# Build outputs
+# =========================
+/build/
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# =========================
+# CMake
+# =========================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+*.ninja
+.cmake/
+
+# =========================
+# IDE - VS Code
+# =========================
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/c_cpp_properties.json
+
+# =========================
+# IDE - STM32CubeIDE/Eclipse
+# =========================
+Debug/
+Release/
+.settings/
+*.launch
+
+# =========================
+# STM32CubeMX backups/logs
+# =========================
+*.ioc.bak
+*.ioc.wb
+*.log
+
+# =========================
+# Old project (to integrate later)
+# =========================
+/NUCLEO-F401RE-invpend-merged_oldproject/
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
