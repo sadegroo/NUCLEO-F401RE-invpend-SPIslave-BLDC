@@ -49,7 +49,7 @@ Verify these pins are configured (should be automatic):
 2. Set Combined Channels: **Encoder Mode**
 3. In Configuration → Parameter Settings:
    - Encoder Mode: **Encoder Mode TI1 and TI2**
-   - Counter Period: **4294967295** (32-bit max)
+   - Counter Period: **65535** (16-bit max for TIM3)
    - Auto-Reload Preload: Disable
    - Input Filter: 0 (or small value like 4 for noise filtering)
 
@@ -63,13 +63,23 @@ Verify these pins are configured (should be automatic):
 
 ### 1.6 Configure NVIC (Interrupts)
 
-1. Navigate to **System Core → NVIC**
-2. Enable these interrupts:
-   - **DMA1 Stream0 global interrupt**: Priority 5
-   - **DMA1 Stream7 global interrupt**: Priority 5
-3. Verify SPI3 global interrupt is enabled if needed (usually DMA handles it)
+**Note:** DMA interrupts only appear after completing Step 1.2 (SPI3 DMA configuration).
 
-### 1.7 Generate Code
+1. Navigate to **System Core → NVIC**
+2. Enable these interrupts (required for SPI DMA callbacks to work):
+   - **DMA1 Stream0 global interrupt**: Priority 5 (SPI3_RX)
+   - **DMA1 Stream7 global interrupt**: Priority 5 (SPI3_TX)
+3. TIM3 interrupt is NOT needed - encoder mode runs in hardware
+4. SPI3 global interrupt is optional when using DMA
+
+### 1.7 Verify USART2 Configuration
+
+**Note:** USART2 baudrate is set to **921600** for high-speed debugging/logging.
+- This is intentional for real-time motor control data streaming
+- Ensure your terminal/debugger is configured to match this baudrate
+- If you experience communication issues, verify clock accuracy (external crystal recommended)
+
+### 1.8 Generate Code
 
 1. Click **Generate Code** (or press Ctrl+Shift+G)
 2. When prompted about USER CODE sections, select **Keep**

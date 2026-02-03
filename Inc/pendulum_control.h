@@ -81,10 +81,11 @@ extern "C" {
 
 /**
   * @brief  Pendulum encoder state structure
+  * @note   Uses TIM3 which is a 16-bit timer (counter range 0-65535)
   */
 typedef struct {
-    uint32_t cnt;               /**< Current counter value */
-    uint32_t previous_cnt;      /**< Previous counter value */
+    uint16_t cnt;               /**< Current counter value (16-bit for TIM3) */
+    uint16_t previous_cnt;      /**< Previous counter value (16-bit for TIM3) */
     int32_t position_steps;     /**< Accumulated position in encoder steps */
     int32_t position_init;      /**< Initial position offset */
     uint16_t counts_per_turn;   /**< Encoder counts per revolution (2400) */

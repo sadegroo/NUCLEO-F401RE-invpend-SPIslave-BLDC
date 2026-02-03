@@ -51,6 +51,11 @@ Release/
 /NUCLEO-F401RE-invpend-merged_oldproject/
 
 # =========================
+# Documentation PDFs
+# =========================
+docs/*.pdf
+
+# =========================
 # Misc
 # =========================
 *.tmp

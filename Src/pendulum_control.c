@@ -110,17 +110,15 @@ void Pendulum_Encoder_Read(Pendulum_Encoder_TypeDef *enc, TIM_HandleTypeDef *hti
     /* Save previous count */
     enc->previous_cnt = enc->cnt;
 
-    /* Read current counter value */
-    enc->cnt = __HAL_TIM_GET_COUNTER(htim);
+    /* Read current counter value (TIM3 is 16-bit) */
+    enc->cnt = (uint16_t)__HAL_TIM_GET_COUNTER(htim);
 
-    /* Calculate delta with overflow handling
-     * For 32-bit counter, signed subtraction handles wrap-around correctly */
-    int32_t delta = (int32_t)enc->cnt - (int32_t)enc->previous_cnt;
+    /* Calculate delta with 16-bit overflow handling
+     * Signed subtraction of uint16_t values handles wrap-around correctly:
+     * e.g., prev=65530, cnt=5 -> (int16_t)(5-65530) = 11 (correct forward delta) */
+    int16_t delta = (int16_t)(enc->cnt - enc->previous_cnt);
 
-    /* Handle large jumps (overflow detection for 16-bit counters if used) */
-    /* For 32-bit counter at 2400 counts/rev, overflow is unlikely in normal operation */
-
-    /* Accumulate position */
+    /* Accumulate position (int32_t for extended range) */
     enc->position_steps += delta;
 }
 
