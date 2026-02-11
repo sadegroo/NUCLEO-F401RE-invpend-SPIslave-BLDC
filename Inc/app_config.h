@@ -33,6 +33,17 @@ extern "C" {
 #define TEST_MODE_NO_MOTOR          1
 
 /**
+  * @brief  Skip waiting for SPI master
+  *
+  * When set to 1, the state machine runs independently without waiting for
+  * SPI transactions from the Raspberry Pi. Useful for testing encoder
+  * functionality without the Pi connected.
+  *
+  * Set to 0 to enable normal SPI-synchronized operation.
+  */
+#define SKIP_SPI_WAIT               0
+
+/**
   * @brief  Enable pendulum encoder debug output via UART
   *
   * When set to 1, the pendulum encoder count is periodically printed to UART2

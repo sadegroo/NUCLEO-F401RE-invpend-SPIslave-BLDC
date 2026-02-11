@@ -157,8 +157,8 @@ void StateMachine_Run(void)
     {
     /*------------------------------------------------------------------*/
     case STATE_START:
-#if TEST_MODE_NO_MOTOR
-        /* In test mode, skip waiting for SPI and go directly to reading encoders */
+#if SKIP_SPI_WAIT
+        /* Skip waiting for SPI and go directly to reading encoders */
         g_state = STATE_READ;
         Chrono_Mark(&cycle_timer);
 #if DEBUG_PENDULUM_ENCODER
@@ -171,6 +171,9 @@ void StateMachine_Run(void)
             spi_txrx_flag = 0;
             g_state = STATE_READ;
             Chrono_Mark(&cycle_timer);
+#if DEBUG_PENDULUM_ENCODER
+            Chrono_Mark(&debug_timer);
+#endif
         }
 #endif
         break;
@@ -207,21 +210,22 @@ void StateMachine_Run(void)
         __enable_irq();
 
 #if DEBUG_PENDULUM_ENCODER
-        /* Periodically print pendulum encoder count to UART */
+        /* Periodically print debug info to UART */
         if (Chrono_GetDiffNoMark(&debug_timer) >= DEBUG_PRINT_INTERVAL_S)
         {
             Chrono_Mark(&debug_timer);
-            char debug_buf[64];
+            char debug_buf[80];
             int len = snprintf(debug_buf, sizeof(debug_buf),
-                               "Pend: %ld  Torq: %d mNm\r\n",
+                               "Pend:%ld torSP:%d torCV:%d\r\n",
                                (long)pendulum_enc.position_steps,
+                               torque_cmd_mNm,
                                measured_torque);
             HAL_UART_Transmit(&huart2, (uint8_t *)debug_buf, len, 10);
         }
 #endif
 
-#if TEST_MODE_NO_MOTOR
-        /* In test mode, wait for sample interval then loop back to READ */
+#if SKIP_SPI_WAIT
+        /* Without SPI, wait for sample interval then loop back to READ */
         if (Chrono_GetDiffNoMark(&cycle_timer) >= T_SAMPLE)
         {
             Chrono_Mark(&cycle_timer);

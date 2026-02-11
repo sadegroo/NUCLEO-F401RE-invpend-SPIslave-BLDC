@@ -60,7 +60,7 @@ cmake --build build/Debug --target clean
 
 | File | Key Definitions |
 |------|-----------------|
-| [Inc/app_config.h](Inc/app_config.h) | `TEST_MODE_NO_MOTOR`, `DEBUG_PENDULUM_ENCODER`, `DEBUG_PRINT_INTERVAL_MS` |
+| [Inc/app_config.h](Inc/app_config.h) | `TEST_MODE_NO_MOTOR`, `SKIP_SPI_WAIT`, `DEBUG_PENDULUM_ENCODER`, `DEBUG_PRINT_INTERVAL_MS` |
 | [Inc/pendulum_control.h](Inc/pendulum_control.h) | State machine states, SPI protocol (8 bytes) |
 | [Inc/torque_control.h](Inc/torque_control.h) | `MOTOR_KT_NM_PER_A = 0.0234`, `MAX_CURRENT_A = 5.0` |
 | [Inc/chrono.h](Inc/chrono.h) | `RCC_SYS_CLOCK_FREQ = 84000000` |
@@ -73,6 +73,9 @@ Debug and test modes are configured in `Inc/app_config.h`:
 // Test mode: disable motor power stage (motor cannot spin)
 #define TEST_MODE_NO_MOTOR          1
 
+// Skip waiting for SPI master (run state machine independently)
+#define SKIP_SPI_WAIT               0
+
 // Enable pendulum encoder debug output via UART (set to 0 to disable)
 #define DEBUG_PENDULUM_ENCODER      1
 
@@ -82,22 +85,35 @@ Debug and test modes are configured in `Inc/app_config.h`:
 
 **TEST_MODE_NO_MOTOR**: When enabled:
 - Motor power stage is completely disabled
-- All torque commands are ignored
-- State machine skips waiting for SPI and runs independently at 1 kHz
+- All torque commands are ignored (ApplyTorqueCommand returns immediately)
 - User button (PC13) is disabled (won't start/stop motor)
-- Useful for testing encoder and communication without motor risk
+- Useful for testing SPI communication without motor risk
+
+**SKIP_SPI_WAIT**: When enabled:
+- State machine runs independently without waiting for SPI transactions
+- Loops at 1 kHz using internal timing instead of SPI sync
+- Useful for testing encoder without Raspberry Pi connected
 
 **DEBUG_PENDULUM_ENCODER**: When enabled:
-- Pendulum encoder count and measured torque printed to UART2 (921600 baud)
-- Output interval controlled by `DEBUG_PRINT_INTERVAL_MS` (default 100ms = 10 Hz)
-- Useful for testing encoder connection without Raspberry Pi
+- Debug info printed to UART2 (921600 baud) at 10 Hz
+- Format: `Pend:<encoder> torSP:<commanded> torCV:<measured>`
+- Useful for verifying encoder and SPI communication
+
+### Configuration Combinations
+
+| TEST_MODE_NO_MOTOR | SKIP_SPI_WAIT | Use Case |
+|--------------------|---------------|----------|
+| 1 | 1 | Encoder test without Pi or motor |
+| 1 | 0 | SPI test with Pi, motor disabled (safe) |
+| 0 | 0 | Normal operation |
+| 0 | 1 | Not recommended (motor without control) |
 
 ### Test Mode Behavior
 
-When `TEST_MODE_NO_MOTOR=1`, the state machine operates differently:
+When `SKIP_SPI_WAIT=1`, the state machine skips SPI synchronization:
 
 ```
-Normal mode:                          Test mode:
+Normal mode (SKIP_SPI_WAIT=0):        Skip SPI mode (SKIP_SPI_WAIT=1):
 STATE_START → wait for SPI    →       STATE_START → immediately to READ
 STATE_READ  → prepare TX buf  →       STATE_READ  → read encoders, debug print
 STATE_WAIT_SPI → wait for SPI →       (wait 1ms)  → loop back to READ
@@ -551,9 +567,10 @@ StateMachine_Run();
 | Encoder not counting | Verify pull-ups enabled, check TIM3 encoder mode |
 | Motor not responding | Ensure `MC_StartMotor1()` called, check motor state |
 | Timing drift | Verify 84 MHz clock from HSE, check `Chrono_Init()` |
-| No UART output in test mode | Fixed in state machine - test mode now skips SPI wait |
+| No UART output in test mode | Set `SKIP_SPI_WAIT=1` or connect Pi SPI master |
 | Torque shows ~47mNm when motor off | Normal - ADC offset not calibrated without motor running |
 | User button starts motor | Override `UI_HandleStartStopButton_cb()` (already done) |
+| Simulink display shows 0 | Display block may not be connected to signal - check signal routing |
 
 ## Build and Flash
 

@@ -120,14 +120,15 @@ For testing without the Raspberry Pi or motor, edit `Inc/app_config.h`:
 
 ```c
 #define TEST_MODE_NO_MOTOR      1   // Disable motor (safe for testing)
-#define DEBUG_PENDULUM_ENCODER  1   // Print encoder to UART (921600 baud)
+#define SKIP_SPI_WAIT           1   // Run without Pi (set 0 for SPI test)
+#define DEBUG_PENDULUM_ENCODER  1   // Print to UART (921600 baud)
 ```
 
-In test mode:
-- Motor is completely disabled (ignores all torque commands)
-- State machine runs independently without SPI master
-- Pendulum encoder values printed to ST-Link virtual COM port
-- User button disabled (won't accidentally start motor)
+Configuration options:
+- `TEST_MODE_NO_MOTOR=1`: Motor disabled, torque commands ignored
+- `SKIP_SPI_WAIT=1`: Run without Pi connected
+- `SKIP_SPI_WAIT=0`: Wait for SPI from Pi (use for SPI testing)
+- Debug output format: `Pend:<encoder> torSP:<cmd> torCV:<measured>`
 
 ### Dependencies
 
