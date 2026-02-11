@@ -60,9 +60,53 @@ cmake --build build/Debug --target clean
 
 | File | Key Definitions |
 |------|-----------------|
-| [Inc/pendulum_control.h](Inc/pendulum_control.h) | State machine states, SPI protocol (6 bytes) |
+| [Inc/app_config.h](Inc/app_config.h) | `TEST_MODE_NO_MOTOR`, `DEBUG_PENDULUM_ENCODER`, `DEBUG_PRINT_INTERVAL_MS` |
+| [Inc/pendulum_control.h](Inc/pendulum_control.h) | State machine states, SPI protocol (8 bytes) |
 | [Inc/torque_control.h](Inc/torque_control.h) | `MOTOR_KT_NM_PER_A = 0.0234`, `MAX_CURRENT_A = 5.0` |
 | [Inc/chrono.h](Inc/chrono.h) | `RCC_SYS_CLOCK_FREQ = 84000000` |
+
+### Debug Configuration
+
+Debug and test modes are configured in `Inc/app_config.h`:
+
+```c
+// Test mode: disable motor power stage (motor cannot spin)
+#define TEST_MODE_NO_MOTOR          1
+
+// Enable pendulum encoder debug output via UART (set to 0 to disable)
+#define DEBUG_PENDULUM_ENCODER      1
+
+// Debug print interval in milliseconds
+#define DEBUG_PRINT_INTERVAL_MS     100
+```
+
+**TEST_MODE_NO_MOTOR**: When enabled:
+- Motor power stage is completely disabled
+- All torque commands are ignored
+- State machine skips waiting for SPI and runs independently at 1 kHz
+- User button (PC13) is disabled (won't start/stop motor)
+- Useful for testing encoder and communication without motor risk
+
+**DEBUG_PENDULUM_ENCODER**: When enabled:
+- Pendulum encoder count and measured torque printed to UART2 (921600 baud)
+- Output interval controlled by `DEBUG_PRINT_INTERVAL_MS` (default 100ms = 10 Hz)
+- Useful for testing encoder connection without Raspberry Pi
+
+### Test Mode Behavior
+
+When `TEST_MODE_NO_MOTOR=1`, the state machine operates differently:
+
+```
+Normal mode:                          Test mode:
+STATE_START → wait for SPI    →       STATE_START → immediately to READ
+STATE_READ  → prepare TX buf  →       STATE_READ  → read encoders, debug print
+STATE_WAIT_SPI → wait for SPI →       (wait 1ms)  → loop back to READ
+STATE_CONTROL → apply torque  →       (skipped)
+```
+
+**Known behavior in test mode:**
+- Measured torque shows ~47 mNm offset even with motor unpowered. This is normal - the current sense ADCs have uncalibrated DC offset. The MC SDK calibrates these when `MC_StartMotor1()` is called, which is skipped in test mode.
+- The user button (PC13) is overridden to do nothing via `UI_HandleStartStopButton_cb()` in `pendulum_control.c`.
 
 ## Hardware Wiring Guide
 
@@ -366,20 +410,22 @@ Connect to IHM08M1 J2 terminals (U, V, W).
 
 ## SPI Protocol
 
-**Buffer size**: 6 bytes, **Endianness**: Big-endian
+**Buffer size**: 8 bytes, **Endianness**: Big-endian
 
 ### RX from Raspberry Pi
 ```
-Bytes [0-1]: int16_t torque_cmd    // Torque command in milli-Nm
-Bytes [2-3]: int16_t reserved1     // Future use
-Bytes [4-5]: int16_t reserved2     // Future use
+Bytes [0-1]: int16_t torque_cmd      // Torque command in milli-Nm
+Bytes [2-3]: int16_t reserved1       // Future use
+Bytes [4-5]: int16_t reserved2       // Future use
+Bytes [6-7]: int16_t reserved3       // Future use
 ```
 
 ### TX to Raspberry Pi
 ```
-Bytes [0-1]: int16_t pendulum_pos  // Encoder counts
-Bytes [2-3]: int16_t motor_pos     // Electrical angle
-Bytes [4-5]: int16_t motor_vel     // Velocity in SPEED_UNIT
+Bytes [0-1]: int16_t pendulum_pos    // Encoder counts
+Bytes [2-3]: int16_t motor_pos       // Electrical angle
+Bytes [4-5]: int16_t motor_vel       // Velocity in SPEED_UNIT
+Bytes [6-7]: int16_t measured_torque // Actual motor torque in milli-Nm
 ```
 
 ## State Machine (`StateMachine_Run`)
@@ -505,3 +551,20 @@ StateMachine_Run();
 | Encoder not counting | Verify pull-ups enabled, check TIM3 encoder mode |
 | Motor not responding | Ensure `MC_StartMotor1()` called, check motor state |
 | Timing drift | Verify 84 MHz clock from HSE, check `Chrono_Init()` |
+| No UART output in test mode | Fixed in state machine - test mode now skips SPI wait |
+| Torque shows ~47mNm when motor off | Normal - ADC offset not calibrated without motor running |
+| User button starts motor | Override `UI_HandleStartStopButton_cb()` (already done) |
+
+## Build and Flash
+
+```bash
+# Build
+cmake --build build/Debug
+
+# Flash via OpenOCD
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+  -c "program build/Debug/invpend_BLDC.elf verify reset exit"
+
+# Or flash via STM32CubeProgrammer
+STM32_Programmer_CLI -c port=SWD -w build/Debug/invpend_BLDC.elf -v -rst
+```

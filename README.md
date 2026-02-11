@@ -82,7 +82,7 @@ This project uses the mechanical structure from the [STEVAL-EDUKIT01](https://ww
 
 ### SPI Protocol
 
-6-byte bidirectional exchange at 1 kHz:
+8-byte bidirectional exchange at 1 kHz:
 
 **STM32 → Raspberry Pi:**
 | Bytes | Type | Description |
@@ -90,6 +90,7 @@ This project uses the mechanical structure from the [STEVAL-EDUKIT01](https://ww
 | 0-1 | int16 | Pendulum position (encoder counts) |
 | 2-3 | int16 | Motor position (electrical angle) |
 | 4-5 | int16 | Motor velocity |
+| 6-7 | int16 | Measured motor torque (milli-Nm) |
 
 **Raspberry Pi → STM32:**
 | Bytes | Type | Description |
@@ -97,6 +98,7 @@ This project uses the mechanical structure from the [STEVAL-EDUKIT01](https://ww
 | 0-1 | int16 | Torque command (milli-Nm) |
 | 2-3 | int16 | Reserved |
 | 4-5 | int16 | Reserved |
+| 6-7 | int16 | Reserved |
 
 ### Building
 
@@ -107,9 +109,25 @@ cmake -B build/Debug -DCMAKE_BUILD_TYPE=Debug
 # Build
 cmake --build build/Debug
 
-# Flash (using ST-Link)
-# Use STM32CubeProgrammer or OpenOCD
+# Flash via OpenOCD
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+  -c "program build/Debug/invpend_BLDC.elf verify reset exit"
 ```
+
+### Test Mode
+
+For testing without the Raspberry Pi or motor, edit `Inc/app_config.h`:
+
+```c
+#define TEST_MODE_NO_MOTOR      1   // Disable motor (safe for testing)
+#define DEBUG_PENDULUM_ENCODER  1   // Print encoder to UART (921600 baud)
+```
+
+In test mode:
+- Motor is completely disabled (ignores all torque commands)
+- State machine runs independently without SPI master
+- Pendulum encoder values printed to ST-Link virtual COM port
+- User button disabled (won't accidentally start motor)
 
 ### Dependencies
 

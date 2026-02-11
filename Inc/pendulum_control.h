@@ -51,21 +51,23 @@ extern "C" {
  * SPI Protocol Definitions
  ******************************************************************************/
 
-/** SPI buffer size (3 x int16_t = 6 bytes) */
-#define SPI_BUFFER_SIZE 6
+/** SPI buffer size (4 x int16_t = 8 bytes) */
+#define SPI_BUFFER_SIZE 8
 
 /**
-  * SPI Protocol (6 bytes, big-endian):
+  * SPI Protocol (8 bytes, big-endian):
   *
   * RX from RPi (Master):
   *   [0-1] int16_t torque_cmd     - Torque command in milli-Nm
   *   [2-3] int16_t reserved1      - Reserved for future use
   *   [4-5] int16_t reserved2      - Reserved for future use
+  *   [6-7] int16_t reserved3      - Reserved for future use
   *
   * TX to RPi (Master):
   *   [0-1] int16_t pendulum_pos   - Pendulum encoder position (counts)
   *   [2-3] int16_t motor_pos      - Motor encoder position (counts)
   *   [4-5] int16_t motor_vel      - Motor velocity (RPM or SPEED_UNIT)
+  *   [6-7] int16_t measured_torque - Measured motor torque (milli-Nm)
   */
 
 /*******************************************************************************

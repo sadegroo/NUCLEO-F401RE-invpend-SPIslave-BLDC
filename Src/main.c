@@ -24,6 +24,7 @@
 #include "pendulum_control.h"
 #include "torque_control.h"
 #include "chrono.h"
+#include "app_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -130,8 +131,10 @@ int main(void)
   /* Start SPI DMA circular communication */
   SPI_StartCommunication();
 
+#if !TEST_MODE_NO_MOTOR
   /* Start motor in torque mode with zero initial torque */
   MC_ProgramTorqueRampMotor1_F(0.0f, 0);
+#endif
   /* USER CODE END 2 */
 
   /* Infinite loop */

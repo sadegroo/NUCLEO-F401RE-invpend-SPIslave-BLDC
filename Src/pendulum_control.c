@@ -15,13 +15,16 @@
 #include "torque_control.h"
 #include "chrono.h"
 #include "mc_api.h"
+#include "app_config.h"
 #include <string.h>
+#include <stdio.h>
 
 /*******************************************************************************
  * External Handles (defined in main.c by CubeMX)
  ******************************************************************************/
 extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim3;
+extern UART_HandleTypeDef huart2;
 
 /*******************************************************************************
  * Module Variables
@@ -56,6 +59,14 @@ static Pendulum_Encoder_TypeDef pendulum_enc = {
 
 /** Cycle timer for timing measurements */
 static Chrono_TypeDef cycle_timer = {0, 0, 0.0f};
+
+#if DEBUG_PENDULUM_ENCODER
+/** Debug print timer */
+static Chrono_TypeDef debug_timer = {0, 0, 0.0f};
+
+/** Debug print interval in seconds */
+#define DEBUG_PRINT_INTERVAL_S  (DEBUG_PRINT_INTERVAL_MS / 1000.0f)
+#endif
 
 /*******************************************************************************
  * Private Functions
@@ -98,6 +109,11 @@ void Pendulum_Init(void)
     g_state = STATE_START;
     spi_txrx_flag = 0;
     spi_err_flag = 0;
+
+#if DEBUG_PENDULUM_ENCODER
+    /* Initialize debug timer */
+    Chrono_Mark(&debug_timer);
+#endif
 }
 
 /**
@@ -141,6 +157,14 @@ void StateMachine_Run(void)
     {
     /*------------------------------------------------------------------*/
     case STATE_START:
+#if TEST_MODE_NO_MOTOR
+        /* In test mode, skip waiting for SPI and go directly to reading encoders */
+        g_state = STATE_READ;
+        Chrono_Mark(&cycle_timer);
+#if DEBUG_PENDULUM_ENCODER
+        Chrono_Mark(&debug_timer);
+#endif
+#else
         /* Wait for first SPI transaction to establish communication */
         if (spi_txrx_flag)
         {
@@ -148,6 +172,7 @@ void StateMachine_Run(void)
             g_state = STATE_READ;
             Chrono_Mark(&cycle_timer);
         }
+#endif
         break;
 
     /*------------------------------------------------------------------*/
@@ -164,18 +189,47 @@ void StateMachine_Run(void)
         /* Get motor velocity from MC SDK (in SPEED_UNIT) */
         int16_t motor_vel = MC_GetMecSpeedAverageMotor1();
 
+        /* Get measured motor torque */
+        int16_t measured_torque = GetMeasuredTorque();
+
         /* Pack TX buffer with big-endian data */
         int16_t pend_be = swap16((int16_t)pendulum_enc.position_steps);
         int16_t mpos_be = swap16(motor_pos);
         int16_t mvel_be = swap16(motor_vel);
+        int16_t mtorq_be = swap16(measured_torque);
 
         /* Disable interrupts briefly to ensure atomic buffer update */
         __disable_irq();
         memcpy(&spi_tx_buf[0], &pend_be, 2);
         memcpy(&spi_tx_buf[2], &mpos_be, 2);
         memcpy(&spi_tx_buf[4], &mvel_be, 2);
+        memcpy(&spi_tx_buf[6], &mtorq_be, 2);
         __enable_irq();
 
+#if DEBUG_PENDULUM_ENCODER
+        /* Periodically print pendulum encoder count to UART */
+        if (Chrono_GetDiffNoMark(&debug_timer) >= DEBUG_PRINT_INTERVAL_S)
+        {
+            Chrono_Mark(&debug_timer);
+            char debug_buf[64];
+            int len = snprintf(debug_buf, sizeof(debug_buf),
+                               "Pend: %ld  Torq: %d mNm\r\n",
+                               (long)pendulum_enc.position_steps,
+                               measured_torque);
+            HAL_UART_Transmit(&huart2, (uint8_t *)debug_buf, len, 10);
+        }
+#endif
+
+#if TEST_MODE_NO_MOTOR
+        /* In test mode, wait for sample interval then loop back to READ */
+        if (Chrono_GetDiffNoMark(&cycle_timer) >= T_SAMPLE)
+        {
+            Chrono_Mark(&cycle_timer);
+            g_state = STATE_READ;
+        }
+        break;
+    }
+#else
         g_state = STATE_WAIT_SPI;
         break;
     }
@@ -199,6 +253,7 @@ void StateMachine_Run(void)
             g_state = STATE_OVERTIME;
         }
         break;
+#endif
 
     /*------------------------------------------------------------------*/
     case STATE_OVERTIME:
@@ -295,4 +350,16 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
         spi_err_flag = 1;
         /* Could restart SPI here if needed */
     }
+}
+
+/**
+  * @brief  Override the MC SDK Start/Stop button callback
+  *
+  * This overrides the __weak function in mc_tasks.c to disable
+  * the user button motor control. In our application, motor control
+  * is handled via SPI commands from the Raspberry Pi only.
+  */
+void UI_HandleStartStopButton_cb(void)
+{
+    /* Do nothing - motor control is via SPI only */
 }

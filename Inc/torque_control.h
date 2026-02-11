@@ -73,6 +73,17 @@ static inline int16_t IqToTorque(float iq_amps)
   */
 void ApplyTorqueCommand(int16_t torque_mNm);
 
+/**
+  * @brief  Get the measured motor torque from FOC current feedback
+  * @retval Measured torque in milli-Newton-meters
+  *
+  * This function reads the actual Iq current from the Motor Control SDK
+  * and converts it to torque using the motor torque constant.
+  * The returned value represents the actual torque being produced by
+  * the motor, which may differ from the commanded torque.
+  */
+int16_t GetMeasuredTorque(void);
+
 #ifdef __cplusplus
 }
 #endif
