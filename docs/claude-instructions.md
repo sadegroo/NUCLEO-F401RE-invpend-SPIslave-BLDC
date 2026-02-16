@@ -81,6 +81,9 @@ Debug and test modes are configured in `Inc/app_config.h`:
 
 // Debug print interval in milliseconds
 #define DEBUG_PRINT_INTERVAL_MS     100
+
+// Button-triggered torque test: press blue button to apply +20 mNm for 5 seconds
+#define TEST_MODE_TORQUE_BUTTON     0
 ```
 
 **TEST_MODE_NO_MOTOR**: When enabled:
@@ -99,14 +102,21 @@ Debug and test modes are configured in `Inc/app_config.h`:
 - Format: `Pend:<encoder> torSP:<commanded> torCV:<measured>`
 - Useful for verifying encoder and SPI communication
 
+**TEST_MODE_TORQUE_BUTTON**: When enabled:
+- Blue button (PC13) triggers a torque test
+- Motor starts and applies +20 mNm for 5 seconds
+- Overrides SPI torque commands during test
+- Useful for testing motor without Raspberry Pi
+
 ### Configuration Combinations
 
-| TEST_MODE_NO_MOTOR | SKIP_SPI_WAIT | Use Case |
-|--------------------|---------------|----------|
-| 1 | 1 | Encoder test without Pi or motor |
-| 1 | 0 | SPI test with Pi, motor disabled (safe) |
-| 0 | 0 | Normal operation |
-| 0 | 1 | Not recommended (motor without control) |
+| TEST_MODE_NO_MOTOR | SKIP_SPI_WAIT | TEST_MODE_TORQUE_BUTTON | Use Case |
+|--------------------|---------------|-------------------------|----------|
+| 1 | 1 | 0 | Encoder test without Pi or motor |
+| 1 | 0 | 0 | SPI test with Pi, motor disabled (safe) |
+| 0 | 0 | 0 | Normal operation (Pi controls motor) |
+| 0 | 0 | 1 | Button torque test with Pi connected |
+| 0 | 1 | 1 | Button torque test without Pi |
 
 ### Test Mode Behavior
 
@@ -464,13 +474,25 @@ STATE_HALT (99) → Halted state
 
 ## Timing & Interrupts
 
-| Component | Frequency | Priority |
-|-----------|-----------|----------|
-| System Clock | 84 MHz | - |
-| Motor FOC (TIM1) | ~16 kHz | 0 (highest) |
-| SPI DMA | RPi-driven (~1 kHz) | 0 |
-| Pendulum Control Loop | 1 kHz target | main loop |
-| UART Debug | 921600 baud | 3 |
+| Component | Frequency | Priority | Notes |
+|-----------|-----------|----------|-------|
+| System Clock | 84 MHz | - | |
+| TIM1 Update (PWM) | 16 kHz | 0 | Highest priority |
+| ADC (FOC calculation) | 16 kHz | 2 | **Must not be preempted** |
+| SPI3 DMA (RX/TX) | RPi-driven (~1 kHz) | **3** | Below ADC to avoid MC_DURATION fault |
+| USART2 | 921600 baud | 3 | Owned by MC SDK (ASPEP) |
+| Pendulum Control Loop | 1 kHz target | main loop | |
+
+### Critical: Interrupt Priority Configuration
+
+**MC_DURATION Fault Prevention**: The SPI DMA interrupts (DMA1_Stream0, DMA1_Stream7) must have **lower priority than ADC** (higher number = lower priority on Cortex-M). If SPI DMA preempts the FOC calculation in ADC_IRQHandler, it causes MC_DURATION fault (0x0001).
+
+```c
+// In MX_DMA_Init() - main.c
+HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 3, 0);  // SPI3 RX - priority 3
+HAL_NVIC_SetPriority(DMA1_Stream7_IRQn, 3, 0);  // SPI3 TX - priority 3
+// ADC_IRQn is at priority 2 - FOC runs here
+```
 
 ## Critical Constants
 
@@ -571,6 +593,37 @@ StateMachine_Run();
 | Torque shows ~47mNm when motor off | Normal - ADC offset not calibrated without motor running |
 | User button starts motor | Override `UI_HandleStartStopButton_cb()` (already done) |
 | Simulink display shows 0 | Display block may not be connected to signal - check signal routing |
+| MC_DURATION fault (0x0001) | SPI DMA priority too high - set to 3, below ADC (2) |
+| UART freezes system | Don't use HAL_UART_Transmit_IT - use blocking with short timeout |
+| Motor position saturates quickly | Use `SPD_GetMecAngle()` not `MC_GetElAngledppMotor1()` |
+
+### UART Limitation (MC SDK Conflict)
+
+**USART2 is owned by the Motor Control SDK** for ASPEP protocol communication. The USART2_IRQHandler in `stm32_mc_common_it.c` does NOT call `HAL_UART_IRQHandler()`, so **`HAL_UART_Transmit_IT()` will not work** (callbacks never fire, HAL state machine hangs).
+
+**Solution**: Use blocking `HAL_UART_Transmit()` with short timeout (1ms):
+```c
+HAL_UART_Transmit(&huart2, (uint8_t *)msg, len, 1);  // 1ms timeout
+```
+
+### Motor Encoder Position
+
+The motor has 8 pole pairs, so electrical angle wraps 8x per mechanical revolution. Use mechanical angle for position tracking:
+
+```c
+// Wrong - saturates within ~45° of rotation:
+int16_t motor_pos = MC_GetElAngledppMotor1();  // Electrical angle
+
+// Correct - 8192 counts per revolution:
+int32_t mec_angle_raw = SPD_GetMecAngle(&ENCODER_M1._Super);  // 65536 counts/rev
+int16_t motor_pos = (int16_t)(mec_angle_raw >> 3);            // 8192 counts/rev
+```
+
+Requires:
+```c
+#include "encoder_speed_pos_fdbk.h"
+extern ENCODER_Handle_t ENCODER_M1;
+```
 
 ## Build and Flash
 

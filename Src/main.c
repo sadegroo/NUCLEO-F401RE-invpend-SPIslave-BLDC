@@ -25,6 +25,10 @@
 #include "torque_control.h"
 #include "chrono.h"
 #include "app_config.h"
+#include "mc_api.h"
+#include "mc_interface.h"
+#include <string.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -131,10 +135,13 @@ int main(void)
   /* Start SPI DMA circular communication */
   SPI_StartCommunication();
 
-#if !TEST_MODE_NO_MOTOR
-  /* Start motor in torque mode with zero initial torque */
-  MC_ProgramTorqueRampMotor1_F(0.0f, 0);
-#endif
+  /* Startup message to verify UART is working */
+  {
+    const char *msg = "\r\n=== Inverted Pendulum Started ===\r\n";
+    HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), 100);
+    msg = "Press blue button to start motor torque test\r\n";
+    HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), 100);
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -575,11 +582,13 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Stream0_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
+  /* DMA1_Stream0_IRQn interrupt configuration - SPI3 RX
+   * Priority 3 = lower than ADC (priority 2) to avoid preempting FOC */
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
-  /* DMA1_Stream7_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream7_IRQn, 0, 0);
+  /* DMA1_Stream7_IRQn interrupt configuration - SPI3 TX
+   * Priority 3 = lower than ADC (priority 2) to avoid preempting FOC */
+  HAL_NVIC_SetPriority(DMA1_Stream7_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream7_IRQn);
 
 }

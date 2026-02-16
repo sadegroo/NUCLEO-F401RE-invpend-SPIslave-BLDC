@@ -122,13 +122,23 @@ For testing without the Raspberry Pi or motor, edit `Inc/app_config.h`:
 #define TEST_MODE_NO_MOTOR      1   // Disable motor (safe for testing)
 #define SKIP_SPI_WAIT           1   // Run without Pi (set 0 for SPI test)
 #define DEBUG_PENDULUM_ENCODER  1   // Print to UART (921600 baud)
+#define TEST_MODE_TORQUE_BUTTON 0   // Button-triggered torque test
 ```
 
 Configuration options:
 - `TEST_MODE_NO_MOTOR=1`: Motor disabled, torque commands ignored
 - `SKIP_SPI_WAIT=1`: Run without Pi connected
 - `SKIP_SPI_WAIT=0`: Wait for SPI from Pi (use for SPI testing)
+- `TEST_MODE_TORQUE_BUTTON=1`: Blue button applies +20 mNm for 5 seconds
 - Debug output format: `Pend:<encoder> torSP:<cmd> torCV:<measured>`
+
+#### Button Torque Test Mode
+
+When `TEST_MODE_TORQUE_BUTTON=1`:
+1. Press the blue user button (PC13)
+2. Motor starts and applies +20 mNm torque for 5 seconds
+3. After 5 seconds, torque returns to zero
+4. Useful for testing motor without Raspberry Pi control
 
 ### Dependencies
 

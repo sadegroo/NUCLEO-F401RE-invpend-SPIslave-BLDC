@@ -15,6 +15,8 @@
 #include "torque_control.h"
 #include "chrono.h"
 #include "mc_api.h"
+#include "mc_interface.h"
+#include "encoder_speed_pos_fdbk.h"
 #include "app_config.h"
 #include <string.h>
 #include <stdio.h>
@@ -25,6 +27,7 @@
 extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim3;
 extern UART_HandleTypeDef huart2;
+extern ENCODER_Handle_t ENCODER_M1;
 
 /*******************************************************************************
  * Module Variables
@@ -48,6 +51,16 @@ static uint8_t spi_tx_buf[SPI_BUFFER_SIZE];
 /** Current torque command in milli-Nm */
 static int16_t torque_cmd_mNm = 0;
 
+#if TEST_MODE_TORQUE_BUTTON
+/** Torque test mode variables */
+static volatile uint8_t torque_test_requested = 0;  /* Set by button ISR */
+static volatile uint8_t torque_test_active = 0;
+static uint32_t torque_test_start_tick = 0;
+static uint8_t motor_start_retries = 0;
+#define TORQUE_TEST_DURATION_MS  5000
+#define TORQUE_TEST_VALUE_MNM    20
+#endif
+
 /** Pendulum encoder instance */
 static Pendulum_Encoder_TypeDef pendulum_enc = {
     .cnt = 0,
@@ -59,6 +72,9 @@ static Pendulum_Encoder_TypeDef pendulum_enc = {
 
 /** Cycle timer for timing measurements */
 static Chrono_TypeDef cycle_timer = {0, 0, 0.0f};
+
+/** UART transmit buffer for debug messages */
+static char uart_tx_buf[80];
 
 #if DEBUG_PENDULUM_ENCODER
 /** Debug print timer */
@@ -80,6 +96,18 @@ static Chrono_TypeDef debug_timer = {0, 0, 0.0f};
 static inline int16_t swap16(int16_t v)
 {
     return (int16_t)(((uint16_t)v >> 8) | ((uint16_t)v << 8));
+}
+
+/**
+  * @brief  Quick UART print helper with short timeout
+  * @param  msg: Null-terminated string to transmit
+  * @note   Uses 1ms timeout to minimize blocking
+  */
+static void UART_Print_Quick(const char *msg)
+{
+    if (msg) {
+        HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)strlen(msg), 1);
+    }
 }
 
 /*******************************************************************************
@@ -184,10 +212,11 @@ void StateMachine_Run(void)
         /* Read pendulum encoder */
         Pendulum_Encoder_Read(&pendulum_enc, &htim3);
 
-        /* Get motor position from MC SDK
-         * MC_GetElAngledppMotor1() returns electrical angle in s16 format
-         * For mechanical position, divide by pole pairs or use encoder directly */
-        int16_t motor_pos = MC_GetElAngledppMotor1();
+        /* Get motor mechanical position from encoder
+         * SPD_GetMecAngle returns int32 in s16 format (65536 counts/turn)
+         * Scale to 8192 counts/turn by dividing by 8 (shift right 3) */
+        int32_t mec_angle_raw = SPD_GetMecAngle(&ENCODER_M1._Super);
+        int16_t motor_pos = (int16_t)(mec_angle_raw >> 3);
 
         /* Get motor velocity from MC SDK (in SPEED_UNIT) */
         int16_t motor_vel = MC_GetMecSpeedAverageMotor1();
@@ -210,17 +239,16 @@ void StateMachine_Run(void)
         __enable_irq();
 
 #if DEBUG_PENDULUM_ENCODER
-        /* Periodically print debug info to UART */
+        /* Periodically print debug info to UART (short timeout) */
         if (Chrono_GetDiffNoMark(&debug_timer) >= DEBUG_PRINT_INTERVAL_S)
         {
             Chrono_Mark(&debug_timer);
-            char debug_buf[80];
-            int len = snprintf(debug_buf, sizeof(debug_buf),
+            int len = snprintf(uart_tx_buf, sizeof(uart_tx_buf),
                                "Pend:%ld torSP:%d torCV:%d\r\n",
                                (long)pendulum_enc.position_steps,
                                torque_cmd_mNm,
                                measured_torque);
-            HAL_UART_Transmit(&huart2, (uint8_t *)debug_buf, len, 10);
+            HAL_UART_Transmit(&huart2, (uint8_t *)uart_tx_buf, (uint16_t)len, 1);
         }
 #endif
 
@@ -279,6 +307,47 @@ void StateMachine_Run(void)
 
     /*------------------------------------------------------------------*/
     case STATE_CONTROL:
+#if TEST_MODE_TORQUE_BUTTON
+    {
+        MCI_State_t motor_state = MC_GetSTMStateMotor1();
+
+        /* Handle button press request - start motor */
+        if (torque_test_requested && !torque_test_active) {
+            if (motor_state == RUN) {
+                /* Motor already running - start test */
+                torque_test_requested = 0;
+                torque_test_active = 1;
+                torque_test_start_tick = HAL_GetTick();
+                UART_Print_Quick(">>> Motor running - torque test started!\r\n");
+            } else if (motor_state == FAULT_NOW || motor_state == FAULT_OVER) {
+                /* Clear fault and retry */
+                MC_AcknowledgeFaultMotor1();
+                motor_start_retries++;
+                if (motor_start_retries >= 3) {
+                    torque_test_requested = 0;
+                    UART_Print_Quick(">>> Failed after 3 retries\r\n");
+                }
+            } else if (motor_state == IDLE) {
+                /* Start motor */
+                MC_ProgramTorqueRampMotor1_F(0.0f, 0);
+                MC_StartMotor1();
+                UART_Print_Quick(">>> Starting motor...\r\n");
+            }
+            /* else: motor is starting up, wait */
+        }
+
+        /* Check if torque test is active and handle timing */
+        if (torque_test_active) {
+            if ((HAL_GetTick() - torque_test_start_tick) < TORQUE_TEST_DURATION_MS) {
+                torque_cmd_mNm = TORQUE_TEST_VALUE_MNM;  /* Override SPI command */
+            } else {
+                torque_cmd_mNm = 0;
+                torque_test_active = 0;  /* Test complete */
+                UART_Print_Quick(">>> Torque test complete!\r\n");
+            }
+        }
+    }
+#endif
         /* Apply torque command to motor */
         ApplyTorqueCommand(torque_cmd_mNm);
 
@@ -365,5 +434,14 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   */
 void UI_HandleStartStopButton_cb(void)
 {
+#if TEST_MODE_TORQUE_BUTTON
+    /* Just set flag - actual motor startup happens in main loop */
+    if (!torque_test_active && !torque_test_requested) {
+        torque_test_requested = 1;
+        motor_start_retries = 0;
+    }
+#else
     /* Do nothing - motor control is via SPI only */
+#endif
 }
+

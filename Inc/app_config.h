@@ -30,7 +30,7 @@ extern "C" {
   * Use this mode when testing encoder and SPI communication without
   * risking unintended motor movement. Set to 0 for normal operation.
   */
-#define TEST_MODE_NO_MOTOR          1
+#define TEST_MODE_NO_MOTOR          0
 
 /**
   * @brief  Skip waiting for SPI master
@@ -61,6 +61,17 @@ extern "C" {
   * DEBUG_PENDULUM_ENCODER is enabled. Default is 100ms (10 Hz).
   */
 #define DEBUG_PRINT_INTERVAL_MS     100
+
+/**
+  * @brief  Button-triggered torque test mode
+  *
+  * When set to 1, pressing the blue user button (PC13) applies a fixed
+  * torque for a set duration, overriding any SPI torque commands.
+  * Useful for testing motor movement without requiring RPi control.
+  *
+  * Set to 0 for normal SPI-controlled operation.
+  */
+#define TEST_MODE_TORQUE_BUTTON     1
 
 #ifdef __cplusplus
 }
