@@ -4,7 +4,7 @@
   * @brief   Inverted pendulum control state machine and encoder interface
   *
   * Implements:
-  * - SPI slave communication with Raspberry Pi (6-byte protocol)
+  * - SPI slave communication with Raspberry Pi (10-byte protocol)
   * - Pendulum encoder reading on TIM3
   * - 1 kHz control loop state machine
   ******************************************************************************
@@ -51,23 +51,22 @@ extern "C" {
  * SPI Protocol Definitions
  ******************************************************************************/
 
-/** SPI buffer size (4 x int16_t = 8 bytes) */
-#define SPI_BUFFER_SIZE 8
+/** SPI buffer size (5 x int16_t = 10 bytes) */
+#define SPI_BUFFER_SIZE 10
 
 /**
-  * SPI Protocol (8 bytes, big-endian):
+  * SPI Protocol (10 bytes, big-endian):
   *
   * RX from RPi (Master):
   *   [0-1] int16_t torque_cmd     - Torque command in milli-Nm
-  *   [2-3] int16_t reserved1      - Reserved for future use
-  *   [4-5] int16_t reserved2      - Reserved for future use
-  *   [6-7] int16_t reserved3      - Reserved for future use
+  *   [2-9] reserved               - Reserved for future use
   *
   * TX to RPi (Master):
   *   [0-1] int16_t pendulum_pos   - Pendulum encoder position (counts)
-  *   [2-3] int16_t motor_pos      - Motor encoder position (counts)
-  *   [4-5] int16_t motor_vel      - Motor velocity (RPM or SPEED_UNIT)
-  *   [6-7] int16_t measured_torque - Measured motor torque (milli-Nm)
+  *   [2-3] int16_t pendulum_vel   - Pendulum velocity (counts/sec / DIV)
+  *   [4-5] int16_t motor_pos      - Motor encoder position (counts)
+  *   [6-7] int16_t motor_vel      - Motor velocity (counts/sec / DIV)
+  *   [8-9] int16_t measured_torque - Measured motor torque (milli-Nm)
   */
 
 /*******************************************************************************
@@ -80,6 +79,19 @@ extern "C" {
 /*******************************************************************************
  * Type Definitions
  ******************************************************************************/
+
+/**
+  * @brief  Velocity calculator state structure
+  * @note   Used for both motor and pendulum velocity calculation with EMA filter
+  */
+typedef struct {
+    uint32_t enc_prev;          /**< Previous encoder count */
+    uint32_t time_prev_cycles;  /**< Previous DWT cycle count */
+    float vel_filtered;         /**< Filtered velocity (counts/sec) */
+    float filter_alpha;         /**< EMA filter coefficient */
+    uint16_t cpr;               /**< Counts per revolution (for wraparound) */
+    uint8_t wrap_at_cpr;        /**< 1 if wraps at CPR (motor), 0 if 16-bit wrap (pendulum) */
+} VelocityCalc_t;
 
 /**
   * @brief  Pendulum encoder state structure

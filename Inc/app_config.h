@@ -52,7 +52,7 @@ extern "C" {
   *
   * Set to 0 for normal operation (no debug output).
   */
-#define DEBUG_PENDULUM_ENCODER      1
+#define DEBUG_PENDULUM_ENCODER      0
 
 /**
   * @brief  Debug print interval in milliseconds
@@ -71,7 +71,61 @@ extern "C" {
   *
   * Set to 0 for normal SPI-controlled operation.
   */
-#define TEST_MODE_TORQUE_BUTTON     1
+#define TEST_MODE_TORQUE_BUTTON     0
+
+/*******************************************************************************
+ * Motor Velocity Calculation
+ ******************************************************************************/
+
+/**
+  * @brief  Motor velocity filter coefficient (exponential moving average)
+  *
+  * Range: 0.01 to 1.0
+  * - Lower values (0.01-0.1): More filtering, slower response, less noise
+  * - Higher values (0.5-1.0): Less filtering, faster response, more noise
+  *
+  * Default: 0.1 (smooth output, ~10 sample time constant)
+  */
+#define MOTOR_VEL_FILTER_ALPHA      0.1f
+
+/**
+  * @brief  Pendulum velocity filter coefficient (exponential moving average)
+  *
+  * Same range and behavior as MOTOR_VEL_FILTER_ALPHA.
+  */
+#define PEND_VEL_FILTER_ALPHA       0.1f
+
+/**
+  * @brief  Velocity output resolution divisor
+  *
+  * The internal velocity (counts/second) is divided by this factor before
+  * sending over SPI. This reduces resolution but increases range.
+  *
+  * Example: With divisor=2, internal velocity of 1000 counts/s outputs as 500
+  */
+#define MOTOR_VEL_RESOLUTION_DIV    2
+
+/*******************************************************************************
+ * Overspeed Safety Protection
+ ******************************************************************************/
+
+/**
+  * @brief  Overspeed threshold in counts/second
+  *
+  * If average velocity exceeds this value, overspeed fault is triggered
+  * after OVERSPEED_REVOLUTIONS have passed.
+  *
+  * 8192 counts/rev, so 20000 cps = ~146 RPM
+  */
+#define OVERSPEED_THRESHOLD_CPS     20000
+
+/**
+  * @brief  Revolutions before overspeed fault triggers
+  *
+  * Number of revolutions at overspeed before entering fault state.
+  * Can be fractional (e.g., 0.25 for quarter revolution).
+  */
+#define OVERSPEED_REVOLUTIONS       0.25f
 
 #ifdef __cplusplus
 }

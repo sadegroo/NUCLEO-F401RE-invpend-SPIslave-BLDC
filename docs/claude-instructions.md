@@ -60,8 +60,8 @@ cmake --build build/Debug --target clean
 
 | File | Key Definitions |
 |------|-----------------|
-| [Inc/app_config.h](Inc/app_config.h) | `TEST_MODE_NO_MOTOR`, `SKIP_SPI_WAIT`, `DEBUG_PENDULUM_ENCODER`, `DEBUG_PRINT_INTERVAL_MS` |
-| [Inc/pendulum_control.h](Inc/pendulum_control.h) | State machine states, SPI protocol (8 bytes) |
+| [Inc/app_config.h](Inc/app_config.h) | Test modes, velocity filter alphas, overspeed thresholds |
+| [Inc/pendulum_control.h](Inc/pendulum_control.h) | State machine states, SPI protocol (10 bytes), VelocityCalc_t |
 | [Inc/torque_control.h](Inc/torque_control.h) | `MOTOR_KT_NM_PER_A = 0.0234`, `MAX_CURRENT_A = 5.0` |
 | [Inc/chrono.h](Inc/chrono.h) | `RCC_SYS_CLOCK_FREQ = 84000000` |
 
@@ -436,23 +436,24 @@ Connect to IHM08M1 J2 terminals (U, V, W).
 
 ## SPI Protocol
 
-**Buffer size**: 8 bytes, **Endianness**: Big-endian
+**Buffer size**: 10 bytes, **Endianness**: Big-endian
 
 ### RX from Raspberry Pi
 ```
 Bytes [0-1]: int16_t torque_cmd      // Torque command in milli-Nm
-Bytes [2-3]: int16_t reserved1       // Future use
-Bytes [4-5]: int16_t reserved2       // Future use
-Bytes [6-7]: int16_t reserved3       // Future use
+Bytes [2-9]: reserved                // Future use
 ```
 
 ### TX to Raspberry Pi
 ```
-Bytes [0-1]: int16_t pendulum_pos    // Encoder counts
-Bytes [2-3]: int16_t motor_pos       // Electrical angle
-Bytes [4-5]: int16_t motor_vel       // Velocity in SPEED_UNIT
-Bytes [6-7]: int16_t measured_torque // Actual motor torque in milli-Nm
+Bytes [0-1]: int16_t pendulum_pos    // Pendulum encoder position (counts)
+Bytes [2-3]: int16_t pendulum_vel    // Pendulum velocity (counts/sec / DIV)
+Bytes [4-5]: int16_t motor_pos       // Motor encoder position (counts)
+Bytes [6-7]: int16_t motor_vel       // Motor velocity (counts/sec / DIV)
+Bytes [8-9]: int16_t measured_torque // Actual motor torque in milli-Nm
 ```
+
+**Note**: Velocities are divided by `MOTOR_VEL_RESOLUTION_DIV` (default: 2) before transmission.
 
 ## State Machine (`StateMachine_Run`)
 

@@ -25,6 +25,7 @@
  * External Handles (defined in main.c by CubeMX)
  ******************************************************************************/
 extern SPI_HandleTypeDef hspi3;
+extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;
 extern UART_HandleTypeDef huart2;
 extern ENCODER_Handle_t ENCODER_M1;
@@ -51,12 +52,14 @@ static uint8_t spi_tx_buf[SPI_BUFFER_SIZE];
 /** Current torque command in milli-Nm */
 static int16_t torque_cmd_mNm = 0;
 
+/** Motor start control (button-triggered, always available) */
+static volatile uint8_t motor_start_requested = 0;
+static uint8_t motor_start_retries = 0;
+
 #if TEST_MODE_TORQUE_BUTTON
-/** Torque test mode variables */
-static volatile uint8_t torque_test_requested = 0;  /* Set by button ISR */
+/** Torque test mode variables (only when enabled) */
 static volatile uint8_t torque_test_active = 0;
 static uint32_t torque_test_start_tick = 0;
-static uint8_t motor_start_retries = 0;
 #define TORQUE_TEST_DURATION_MS  5000
 #define TORQUE_TEST_VALUE_MNM    20
 #endif
@@ -75,6 +78,37 @@ static Chrono_TypeDef cycle_timer = {0, 0, 0.0f};
 
 /** UART transmit buffer for debug messages */
 static char uart_tx_buf[80];
+
+/** Encoder counts per revolution (4x quadrature) */
+#define MOTOR_ENCODER_CPR  8192
+
+/** Velocity calculators (with separate filter alphas) */
+static VelocityCalc_t motor_vel_calc = {
+    .enc_prev = 0,
+    .time_prev_cycles = 0,
+    .vel_filtered = 0.0f,
+    .filter_alpha = MOTOR_VEL_FILTER_ALPHA,
+    .cpr = MOTOR_ENCODER_CPR,
+    .wrap_at_cpr = 1
+};
+
+static VelocityCalc_t pend_vel_calc = {
+    .enc_prev = 0,
+    .time_prev_cycles = 0,
+    .vel_filtered = 0.0f,
+    .filter_alpha = PEND_VEL_FILTER_ALPHA,
+    .cpr = PENDULUM_COUNTS_PER_REV,
+    .wrap_at_cpr = 0
+};
+
+#if DEBUG_PENDULUM_ENCODER
+/** Last raw delta for debugging velocity spikes */
+static int32_t motor_vel_last_delta = 0;
+#endif
+
+/** Overspeed detection */
+static int32_t overspeed_accumulator = 0;
+static uint8_t overspeed_fault_active = 0;
 
 #if DEBUG_PENDULUM_ENCODER
 /** Debug print timer */
@@ -110,6 +144,91 @@ static void UART_Print_Quick(const char *msg)
     }
 }
 
+/**
+  * @brief  Calculate velocity with EMA filtering (generic for any encoder)
+  *
+  * Uses floating-point math and exponential moving average for smooth output.
+  * Handles both CPR-wrap (motor) and 16-bit wrap (pendulum) encoder types.
+  *
+  * @param  vc: Pointer to velocity calculator state
+  * @param  cnt: Current encoder count
+  * @retval Velocity in counts/second (int32_t for full precision)
+  */
+static int32_t CalcVelocity(VelocityCalc_t *vc, uint32_t cnt)
+{
+    /* Measure actual time since last call using DWT cycle counter
+     * SystemCoreClock = 84 MHz, so cycles_to_sec = cycles / 84000000 */
+    uint32_t now_cycles = DWT->CYCCNT;
+    uint32_t dt_cycles = now_cycles - vc->time_prev_cycles;
+    vc->time_prev_cycles = now_cycles;
+
+    /* Convert to seconds (float for precision) */
+    float dt_sec = (float)dt_cycles / (float)SystemCoreClock;
+
+    /* Sanity check: if dt is too small or too large, use nominal 1ms */
+    if (dt_sec < 0.0001f || dt_sec > 0.1f) {
+        dt_sec = 0.001f;
+    }
+
+    /* Calculate encoder delta */
+    int32_t delta = (int32_t)cnt - (int32_t)vc->enc_prev;
+
+    /* Handle wraparound based on encoder type */
+    if (vc->wrap_at_cpr) {
+        /* Motor encoder: wraps at CPR (e.g., 8192)
+         * If delta > cpr/2, counter wrapped backward
+         * If delta < -cpr/2, counter wrapped forward */
+        if (delta > (int32_t)(vc->cpr / 2)) {
+            delta -= vc->cpr;
+        } else if (delta < -(int32_t)(vc->cpr / 2)) {
+            delta += vc->cpr;
+        }
+    } else {
+        /* Pendulum encoder: wraps at 16-bit boundary
+         * Signed 16-bit cast handles wrap naturally */
+        delta = (int16_t)delta;
+    }
+
+    vc->enc_prev = cnt;
+
+    /* Convert to counts/second using measured time delta */
+    float vel_counts_per_sec = (float)delta / dt_sec;
+
+    /* Apply exponential moving average filter (instance-specific alpha) */
+    vc->vel_filtered = vc->filter_alpha * vel_counts_per_sec
+                     + (1.0f - vc->filter_alpha) * vc->vel_filtered;
+
+    /* Return in counts/second (int32 for full precision, scaled later for SPI) */
+    return (int32_t)vc->vel_filtered;
+}
+
+/**
+  * @brief  Check for overspeed condition and trigger fault if needed
+  * @note   Uses motor_vel_calc.vel_filtered for smooth overspeed detection
+  * @retval 1 if overspeed fault triggered, 0 otherwise
+  */
+static uint8_t CheckOverspeed(void)
+{
+    int32_t vel_cps = (int32_t)motor_vel_calc.vel_filtered;
+    int32_t abs_vel = (vel_cps < 0) ? -vel_cps : vel_cps;
+
+    if (abs_vel > OVERSPEED_THRESHOLD_CPS) {
+        /* Accumulate counts: vel (counts/sec) / 1000 (samples/sec) = counts/sample */
+        overspeed_accumulator += abs_vel / 1000;
+
+        /* Check if threshold revolutions exceeded */
+        int32_t threshold_counts = (int32_t)(OVERSPEED_REVOLUTIONS * MOTOR_ENCODER_CPR);
+        if (overspeed_accumulator >= threshold_counts) {
+            overspeed_fault_active = 1;
+            return 1;
+        }
+    } else {
+        /* Below threshold - reset accumulator */
+        overspeed_accumulator = 0;
+    }
+    return 0;
+}
+
 /*******************************************************************************
  * Public Functions
  ******************************************************************************/
@@ -137,6 +256,15 @@ void Pendulum_Init(void)
     g_state = STATE_START;
     spi_txrx_flag = 0;
     spi_err_flag = 0;
+
+    /* Initialize velocity calculators */
+    motor_vel_calc.enc_prev = __HAL_TIM_GET_COUNTER(&htim2);
+    motor_vel_calc.time_prev_cycles = DWT->CYCCNT;
+    motor_vel_calc.vel_filtered = 0.0f;
+
+    pend_vel_calc.enc_prev = __HAL_TIM_GET_COUNTER(&htim3);
+    pend_vel_calc.time_prev_cycles = DWT->CYCCNT;
+    pend_vel_calc.vel_filtered = 0.0f;
 
 #if DEBUG_PENDULUM_ENCODER
     /* Initialize debug timer */
@@ -212,30 +340,45 @@ void StateMachine_Run(void)
         /* Read pendulum encoder */
         Pendulum_Encoder_Read(&pendulum_enc, &htim3);
 
+        /* Calculate pendulum velocity using generic velocity calculator */
+        int32_t pend_vel_raw = CalcVelocity(&pend_vel_calc, pendulum_enc.cnt);
+        int16_t pend_vel = (int16_t)(pend_vel_raw / MOTOR_VEL_RESOLUTION_DIV);
+
         /* Get motor mechanical position from encoder
          * SPD_GetMecAngle returns int32 in s16 format (65536 counts/turn)
          * Scale to 8192 counts/turn by dividing by 8 (shift right 3) */
         int32_t mec_angle_raw = SPD_GetMecAngle(&ENCODER_M1._Super);
         int16_t motor_pos = (int16_t)(mec_angle_raw >> 3);
 
-        /* Get motor velocity from MC SDK (in SPEED_UNIT) */
-        int16_t motor_vel = MC_GetMecSpeedAverageMotor1();
+        /* Calculate motor velocity using generic velocity calculator */
+        int32_t motor_vel_raw = CalcVelocity(&motor_vel_calc, __HAL_TIM_GET_COUNTER(&htim2));
+
+        /* Check overspeed (uses motor_vel_calc.vel_filtered internally) */
+        if (CheckOverspeed()) {
+            g_state = STATE_ERROR;
+            break;
+        }
+
+        /* Scale down and convert to int16 for SPI */
+        int16_t motor_vel = (int16_t)(motor_vel_raw / MOTOR_VEL_RESOLUTION_DIV);
 
         /* Get measured motor torque */
         int16_t measured_torque = GetMeasuredTorque();
 
-        /* Pack TX buffer with big-endian data */
-        int16_t pend_be = swap16((int16_t)pendulum_enc.position_steps);
+        /* Pack TX buffer with big-endian data (10 bytes) */
+        int16_t ppos_be = swap16((int16_t)pendulum_enc.position_steps);
+        int16_t pvel_be = swap16(pend_vel);
         int16_t mpos_be = swap16(motor_pos);
         int16_t mvel_be = swap16(motor_vel);
         int16_t mtorq_be = swap16(measured_torque);
 
         /* Disable interrupts briefly to ensure atomic buffer update */
         __disable_irq();
-        memcpy(&spi_tx_buf[0], &pend_be, 2);
-        memcpy(&spi_tx_buf[2], &mpos_be, 2);
-        memcpy(&spi_tx_buf[4], &mvel_be, 2);
-        memcpy(&spi_tx_buf[6], &mtorq_be, 2);
+        memcpy(&spi_tx_buf[0], &ppos_be, 2);
+        memcpy(&spi_tx_buf[2], &pvel_be, 2);
+        memcpy(&spi_tx_buf[4], &mpos_be, 2);
+        memcpy(&spi_tx_buf[6], &mvel_be, 2);
+        memcpy(&spi_tx_buf[8], &mtorq_be, 2);
         __enable_irq();
 
 #if DEBUG_PENDULUM_ENCODER
@@ -244,8 +387,10 @@ void StateMachine_Run(void)
         {
             Chrono_Mark(&debug_timer);
             int len = snprintf(uart_tx_buf, sizeof(uart_tx_buf),
-                               "Pend:%ld torSP:%d torCV:%d\r\n",
+                               "P:%ld d:%ld v:%d tS:%d tC:%d\r\n",
                                (long)pendulum_enc.position_steps,
+                               (long)motor_vel_last_delta,
+                               motor_vel,
                                torque_cmd_mNm,
                                measured_torque);
             HAL_UART_Transmit(&huart2, (uint8_t *)uart_tx_buf, (uint16_t)len, 1);
@@ -307,47 +452,47 @@ void StateMachine_Run(void)
 
     /*------------------------------------------------------------------*/
     case STATE_CONTROL:
-#if TEST_MODE_TORQUE_BUTTON
     {
         MCI_State_t motor_state = MC_GetSTMStateMotor1();
 
-        /* Handle button press request - start motor */
-        if (torque_test_requested && !torque_test_active) {
+        /* Handle button press - start motor (always available) */
+        if (motor_start_requested) {
             if (motor_state == RUN) {
-                /* Motor already running - start test */
-                torque_test_requested = 0;
+                /* Motor running - clear request */
+                motor_start_requested = 0;
+                motor_start_retries = 0;
+#if TEST_MODE_TORQUE_BUTTON
+                /* Start torque test */
                 torque_test_active = 1;
                 torque_test_start_tick = HAL_GetTick();
-                UART_Print_Quick(">>> Motor running - torque test started!\r\n");
+#endif
             } else if (motor_state == FAULT_NOW || motor_state == FAULT_OVER) {
                 /* Clear fault and retry */
                 MC_AcknowledgeFaultMotor1();
                 motor_start_retries++;
                 if (motor_start_retries >= 3) {
-                    torque_test_requested = 0;
-                    UART_Print_Quick(">>> Failed after 3 retries\r\n");
+                    motor_start_requested = 0;
                 }
             } else if (motor_state == IDLE) {
                 /* Start motor */
                 MC_ProgramTorqueRampMotor1_F(0.0f, 0);
                 MC_StartMotor1();
-                UART_Print_Quick(">>> Starting motor...\r\n");
             }
-            /* else: motor is starting up, wait */
+            /* else: motor is starting up (ALIGNMENT, etc.), wait */
         }
 
-        /* Check if torque test is active and handle timing */
+#if TEST_MODE_TORQUE_BUTTON
+        /* Torque test override (only when enabled) */
         if (torque_test_active) {
             if ((HAL_GetTick() - torque_test_start_tick) < TORQUE_TEST_DURATION_MS) {
-                torque_cmd_mNm = TORQUE_TEST_VALUE_MNM;  /* Override SPI command */
+                torque_cmd_mNm = TORQUE_TEST_VALUE_MNM;
             } else {
                 torque_cmd_mNm = 0;
-                torque_test_active = 0;  /* Test complete */
-                UART_Print_Quick(">>> Torque test complete!\r\n");
+                torque_test_active = 0;
             }
         }
-    }
 #endif
+    }
         /* Apply torque command to motor */
         ApplyTorqueCommand(torque_cmd_mNm);
 
@@ -358,9 +503,24 @@ void StateMachine_Run(void)
 
     /*------------------------------------------------------------------*/
     case STATE_ERROR:
-        /* Error state - stop motor and wait */
+        /* Error state - stop motor */
         ApplyTorqueCommand(0);
-        /* Could add recovery logic here */
+
+        /* Can only exit overspeed fault when SPI sends zero torque command */
+        if (spi_txrx_flag) {
+            spi_txrx_flag = 0;
+            int16_t cmd_be;
+            memcpy(&cmd_be, &spi_rx_buf[0], 2);
+            int16_t received_torque = swap16(cmd_be);
+
+            if (received_torque == 0 && overspeed_fault_active) {
+                /* Reset fault and return to normal operation */
+                overspeed_fault_active = 0;
+                overspeed_accumulator = 0;
+                g_state = STATE_READ;
+                Chrono_Mark(&cycle_timer);
+            }
+        }
         break;
 
     /*------------------------------------------------------------------*/
@@ -434,14 +594,10 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   */
 void UI_HandleStartStopButton_cb(void)
 {
-#if TEST_MODE_TORQUE_BUTTON
-    /* Just set flag - actual motor startup happens in main loop */
-    if (!torque_test_active && !torque_test_requested) {
-        torque_test_requested = 1;
+    /* Request motor start (torque test only if TEST_MODE_TORQUE_BUTTON=1) */
+    if (!motor_start_requested) {
+        motor_start_requested = 1;
         motor_start_retries = 0;
     }
-#else
-    /* Do nothing - motor control is via SPI only */
-#endif
 }
 

@@ -82,36 +82,76 @@ This project uses the mechanical structure from the [STEVAL-EDUKIT01](https://ww
 
 ### SPI Protocol
 
-8-byte bidirectional exchange at 1 kHz:
+10-byte bidirectional exchange at 1 kHz (big-endian):
 
 **STM32 → Raspberry Pi:**
 | Bytes | Type | Description |
 |-------|------|-------------|
 | 0-1 | int16 | Pendulum position (encoder counts) |
-| 2-3 | int16 | Motor position (electrical angle) |
-| 4-5 | int16 | Motor velocity |
-| 6-7 | int16 | Measured motor torque (milli-Nm) |
+| 2-3 | int16 | Pendulum velocity (counts/sec / DIV) |
+| 4-5 | int16 | Motor position (encoder counts) |
+| 6-7 | int16 | Motor velocity (counts/sec / DIV) |
+| 8-9 | int16 | Measured motor torque (milli-Nm) |
 
 **Raspberry Pi → STM32:**
 | Bytes | Type | Description |
 |-------|------|-------------|
 | 0-1 | int16 | Torque command (milli-Nm) |
-| 2-3 | int16 | Reserved |
-| 4-5 | int16 | Reserved |
-| 6-7 | int16 | Reserved |
+| 2-9 | - | Reserved |
 
-### Building
+> **Note**: Velocities are divided by `MOTOR_VEL_RESOLUTION_DIV` (default: 2) before transmission. Filter coefficients configurable via `MOTOR_VEL_FILTER_ALPHA` and `PEND_VEL_FILTER_ALPHA` in `app_config.h`.
+
+### Building and Flashing
+
+#### Build Commands
 
 ```bash
-# Configure
-cmake -B build/Debug -DCMAKE_BUILD_TYPE=Debug
-
-# Build
+# Configure and build (Debug)
+cmake --preset Debug
 cmake --build build/Debug
 
-# Flash via OpenOCD
+# Or configure and build (Release)
+cmake --preset Release
+cmake --build build/Release
+
+# Clean build
+cmake --build build/Debug --target clean
+```
+
+#### Flash via OpenOCD
+
+```bash
+# Flash Debug build
 openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
   -c "program build/Debug/invpend_BLDC.elf verify reset exit"
+
+# Flash Release build
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+  -c "program build/Release/invpend_BLDC.elf verify reset exit"
+```
+
+#### Flash via STM32CubeProgrammer CLI
+
+```bash
+# Flash Debug build
+STM32_Programmer_CLI -c port=SWD -w build/Debug/invpend_BLDC.elf -v -rst
+
+# Flash Release build
+STM32_Programmer_CLI -c port=SWD -w build/Release/invpend_BLDC.elf -v -rst
+
+# Erase and flash
+STM32_Programmer_CLI -c port=SWD -e all -w build/Debug/invpend_BLDC.elf -v -rst
+```
+
+#### One-liner Build and Flash
+
+```bash
+# Build and flash in one command (OpenOCD)
+cmake --build build/Debug && openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+  -c "program build/Debug/invpend_BLDC.elf verify reset exit"
+
+# Build and flash in one command (STM32CubeProgrammer)
+cmake --build build/Debug && STM32_Programmer_CLI -c port=SWD -w build/Debug/invpend_BLDC.elf -v -rst
 ```
 
 ### Test Mode
