@@ -104,6 +104,7 @@ extern "C" {
   * Example: With divisor=2, internal velocity of 1000 counts/s outputs as 500
   */
 #define MOTOR_VEL_RESOLUTION_DIV    2
+#define PEND_VEL_RESOLUTION_DIV     1
 
 /*******************************************************************************
  * Overspeed Safety Protection

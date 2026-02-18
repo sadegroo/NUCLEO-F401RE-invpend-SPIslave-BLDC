@@ -342,7 +342,7 @@ void StateMachine_Run(void)
 
         /* Calculate pendulum velocity using generic velocity calculator */
         int32_t pend_vel_raw = CalcVelocity(&pend_vel_calc, pendulum_enc.cnt);
-        int16_t pend_vel = (int16_t)(pend_vel_raw / MOTOR_VEL_RESOLUTION_DIV);
+        int16_t pend_vel = (int16_t)(pend_vel_raw / PEND_VEL_RESOLUTION_DIV);
 
         /* Get motor mechanical position from encoder
          * SPD_GetMecAngle returns int32 in s16 format (65536 counts/turn)
