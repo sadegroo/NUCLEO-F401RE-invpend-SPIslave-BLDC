@@ -426,8 +426,14 @@ void StateMachine_Run(void)
         /* Scale down and convert to int16 for SPI */
         int16_t motor_vel = (int16_t)(motor_vel_raw / MOTOR_VEL_RESOLUTION_DIV);
 
-        /* Get measured motor torque - use special value if motor not initialized */
-        int16_t measured_torque = motor_initialized ? GetMeasuredTorque() : TORQUE_NOT_INITIALIZED;
+        /* Get measured motor torque - use special value if motor not ready */
+        int16_t measured_torque;
+        MCI_State_t mc_state = MC_GetSTMStateMotor1();
+        if (!motor_initialized || mc_state == FAULT_NOW || mc_state == FAULT_OVER) {
+            measured_torque = TORQUE_NOT_INITIALIZED;
+        } else {
+            measured_torque = GetMeasuredTorque();
+        }
 
         /* Pack TX buffer with big-endian data (10 bytes) */
         int16_t ppos_be = swap16((int16_t)pendulum_enc.position_steps);

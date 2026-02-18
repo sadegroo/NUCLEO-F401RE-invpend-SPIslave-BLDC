@@ -150,14 +150,16 @@ Debug and test modes are configured in `Inc/app_config.h`:
 
 ### Motor Initialization Tracking
 
-The firmware tracks motor initialization state:
-- `motor_initialized = 0`: Motor not running, SPI sends `-999` for measured torque
-- `motor_initialized = 1`: Motor in RUN state, SPI sends real measured torque
+The firmware sends `-999` for measured torque when motor cannot deliver torque:
+- `motor_initialized = 0`: Motor not initialized
+- Motor state is `FAULT_NOW` or `FAULT_OVER`: Motor in fault condition
+
+Real torque values are only sent when motor is initialized AND in RUN state (no faults).
 
 This allows the Raspberry Pi to detect when the motor is ready:
 ```python
 if measured_torque == -999:
-    print("Motor not initialized - waiting...")
+    print("Motor not ready - not initialized or in fault state")
 else:
     print(f"Motor ready, torque: {measured_torque} mNm")
 ```

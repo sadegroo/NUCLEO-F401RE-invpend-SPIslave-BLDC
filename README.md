@@ -175,8 +175,8 @@ The motor can be initialized via:
 - Motor ON → press button → motor stops
 
 **Motor status indication via SPI**:
-- Measured torque = `-999` means motor not initialized (Pi should wait)
-- Real torque values sent once motor reaches RUN state
+- Measured torque = `-999` means motor not ready (not initialized or in fault state)
+- Real torque values sent only when motor is in RUN state without faults
 
 ### Test Mode
 
