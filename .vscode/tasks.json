@@ -46,8 +46,11 @@
             "args": [
                 "-f", "interface/stlink.cfg",
                 "-f", "target/stm32f4x.cfg",
-                "-c", "program ${workspaceFolder}/build/Debug/invpend_BLDC.elf verify reset exit"
+                "-c", "program build/Debug/invpend_BLDC.elf verify reset exit"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always"

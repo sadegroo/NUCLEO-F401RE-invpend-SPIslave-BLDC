@@ -84,6 +84,12 @@ Debug and test modes are configured in `Inc/app_config.h`:
 
 // Button-triggered torque test: press blue button to apply +20 mNm for 5 seconds
 #define TEST_MODE_TORQUE_BUTTON     0
+
+// Motor control state debug output via UART
+#define DEBUG_MOTOR                 1
+
+// Auto-start motor on boot (1) or require button press (0)
+#define AUTO_MOTOR_INIT             1
 ```
 
 **TEST_MODE_NO_MOTOR**: When enabled:
@@ -107,6 +113,60 @@ Debug and test modes are configured in `Inc/app_config.h`:
 - Motor starts and applies +20 mNm for 5 seconds
 - Overrides SPI torque commands during test
 - Useful for testing motor without Raspberry Pi
+
+**DEBUG_MOTOR**: When enabled:
+- Prints motor state, faults, and initialization status to UART2 (921600 baud)
+- Output format: `MC:<state> init:<0/1> flt:0x<hex> req:<0/1>`
+- Prints every 500ms or on state change
+
+**AUTO_MOTOR_INIT**: When enabled:
+- Motor initialization starts automatically after `Pendulum_Init()`
+- No button press required to start motor
+- Useful when Raspberry Pi controls startup timing
+
+### Motor State Codes (MCI_State_t)
+
+| Value | State | Description |
+|-------|-------|-------------|
+| 0 | IDLE | Motor stopped, ready to start |
+| 4 | ALIGNMENT | Rotor alignment phase |
+| 6 | RUN | Motor running normally |
+| 10 | FAULT_NOW | Active fault condition |
+| 11 | FAULT_OVER | Fault acknowledged, motor stopped |
+
+### Motor Fault Codes (MC_GetOccurredFaultsMotor1)
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0x0001 | MC_DURATION | FOC execution rate too high |
+| 0x0002 | MC_OVER_VOLT | Bus overvoltage |
+| 0x0004 | MC_UNDER_VOLT | Bus undervoltage |
+| 0x0008 | MC_OVER_TEMP | Overtemperature |
+| 0x0010 | MC_START_UP | Startup failure |
+| 0x0020 | MC_SPEED_FDBK | Speed feedback error |
+| 0x0040 | MC_BREAK_IN | Break input triggered |
+| 0x0080 | MC_SW_ERROR | Software error |
+| 0x0100 | MC_OVER_CURR | Overcurrent detected |
+
+### Motor Initialization Tracking
+
+The firmware tracks motor initialization state:
+- `motor_initialized = 0`: Motor not running, SPI sends `-999` for measured torque
+- `motor_initialized = 1`: Motor in RUN state, SPI sends real measured torque
+
+This allows the Raspberry Pi to detect when the motor is ready:
+```python
+if measured_torque == -999:
+    print("Motor not initialized - waiting...")
+else:
+    print(f"Motor ready, torque: {measured_torque} mNm")
+```
+
+### Button Toggle Behavior
+
+The blue user button (PC13) toggles motor state with 200ms debounce:
+- Motor OFF → press → motor starts (via `ProcessMotorStartup()`)
+- Motor ON → press → motor stops (via `MC_StopMotor1()`)
 
 ### Configuration Combinations
 
@@ -566,6 +626,31 @@ StateMachine_Run();
 - **Error state**: Motor stops on STATE_ERROR
 - **Watchdog**: SPI timeout detection (1.5× sample time)
 
+### Dual Overspeed Protection
+
+Two independent speed limit windows (configured in `app_config.h`):
+
+| Window | Threshold | Distance | Purpose |
+|--------|-----------|----------|---------|
+| Window 1 | 300 RPM (40960 cps) | 0.25 rev | Allow brief high-speed bursts |
+| Window 2 | 150 RPM (20480 cps) | 0.5 rev | Limit sustained speed |
+
+**Behavior**:
+- If speed exceeds threshold for the window distance, `overspeed_fault_active = 1`
+- Torque command forced to 0 while fault is active
+- Fault clears when Raspberry Pi sends torque command = 0 (acknowledgment)
+
+**Conversion**: RPM = cps × 60 / 8192 (8192 counts per rev)
+
+### MC SDK Speed Measurement Errors
+
+The MC SDK has a speed feedback reliability check:
+```c
+#define M1_SS_MEAS_ERRORS_BEFORE_FAULTS     3  // In drive_parameters.h
+```
+
+This means 3 consecutive speed measurement errors trigger `MC_SPEED_FDBK` fault (0x0020). When motor sits still with zero torque, encoder noise can accumulate errors. Consider increasing this value if motor faults unexpectedly at standstill.
+
 ## Dependencies
 
 - **STM32 HAL**: F4 series HAL drivers
@@ -597,6 +682,9 @@ StateMachine_Run();
 | MC_DURATION fault (0x0001) | SPI DMA priority too high - set to 3, below ADC (2) |
 | UART freezes system | Don't use HAL_UART_Transmit_IT - use blocking with short timeout |
 | Motor position saturates quickly | Use `SPD_GetMecAngle()` not `MC_GetElAngledppMotor1()` |
+| Motor de-inits unexpectedly | Enable `DEBUG_MOTOR=1` to see fault codes; likely `MC_SPEED_FDBK` (0x0020) - increase `M1_SS_MEAS_ERRORS_BEFORE_FAULTS` in drive_parameters.h |
+| Button press triggers twice | Button debounce already 200ms - check for hardware issues |
+| Overspeed fault won't clear | Pi must send torque_cmd=0 to acknowledge and clear fault |
 
 ### UART Limitation (MC SDK Conflict)
 
@@ -639,3 +727,15 @@ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
 # Or flash via STM32CubeProgrammer
 STM32_Programmer_CLI -c port=SWD -w build/Debug/invpend_BLDC.elf -v -rst
 ```
+
+### VS Code Keybindings
+
+Pre-configured in user keybindings:
+
+| Hotkey | Task | Description |
+|--------|------|-------------|
+| `Ctrl+Shift+B` | Build | Compile Debug build |
+| `Ctrl+Shift+F5` | Build and Flash | Compile then flash via OpenOCD |
+| `Ctrl+Alt+F` | Flash | Flash only (no rebuild) |
+
+Tasks are defined in `.vscode/tasks.json`. Flash uses relative path with `cwd` set to workspace folder to avoid Windows path escaping issues with OpenOCD.

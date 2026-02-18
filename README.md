@@ -154,6 +154,30 @@ cmake --build build/Debug && openocd -f interface/stlink.cfg -f target/stm32f4x.
 cmake --build build/Debug && STM32_Programmer_CLI -c port=SWD -w build/Debug/invpend_BLDC.elf -v -rst
 ```
 
+#### VS Code Keybindings
+
+Pre-configured tasks in `.vscode/tasks.json` with keybindings:
+
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Shift+B` | Build (Debug) |
+| `Ctrl+Shift+F5` | Build and Flash |
+| `Ctrl+Alt+F` | Flash only |
+
+### Motor Initialization
+
+The motor can be initialized via:
+1. **Auto-init on boot** (`AUTO_MOTOR_INIT=1` in `app_config.h`) - motor starts automatically
+2. **User button press** - blue button (PC13) toggles motor on/off
+
+**Button behavior** (with 200ms debounce):
+- Motor OFF → press button → motor starts
+- Motor ON → press button → motor stops
+
+**Motor status indication via SPI**:
+- Measured torque = `-999` means motor not initialized (Pi should wait)
+- Real torque values sent once motor reaches RUN state
+
 ### Test Mode
 
 For testing without the Raspberry Pi or motor, edit `Inc/app_config.h`:
@@ -162,14 +186,18 @@ For testing without the Raspberry Pi or motor, edit `Inc/app_config.h`:
 #define TEST_MODE_NO_MOTOR      1   // Disable motor (safe for testing)
 #define SKIP_SPI_WAIT           1   // Run without Pi (set 0 for SPI test)
 #define DEBUG_PENDULUM_ENCODER  1   // Print to UART (921600 baud)
+#define DEBUG_MOTOR             1   // Print motor state/faults to UART
 #define TEST_MODE_TORQUE_BUTTON 0   // Button-triggered torque test
+#define AUTO_MOTOR_INIT         1   // Auto-start motor on boot
 ```
 
 Configuration options:
 - `TEST_MODE_NO_MOTOR=1`: Motor disabled, torque commands ignored
 - `SKIP_SPI_WAIT=1`: Run without Pi connected
 - `SKIP_SPI_WAIT=0`: Wait for SPI from Pi (use for SPI testing)
+- `DEBUG_MOTOR=1`: Print motor state and faults to UART
 - `TEST_MODE_TORQUE_BUTTON=1`: Blue button applies +20 mNm for 5 seconds
+- `AUTO_MOTOR_INIT=1`: Motor starts automatically on boot
 - Debug output format: `Pend:<encoder> torSP:<cmd> torCV:<measured>`
 
 #### Button Torque Test Mode

@@ -63,6 +63,18 @@ extern "C" {
 #define DEBUG_PRINT_INTERVAL_MS     100
 
 /**
+  * @brief  Enable motor control state debug output via UART
+  *
+  * When set to 1, motor state, faults, and initialization status are printed
+  * to UART2 periodically and on state changes. Useful for diagnosing motor
+  * control issues.
+  *
+  * Output format: MC:<state> init:<0/1> flt:0x<hex> req:<0/1>
+  * States: 0=IDLE, 4=ALIGNMENT, 6=RUN, 10=FAULT_NOW, 11=FAULT_OVER
+  */
+#define DEBUG_MOTOR                 1
+
+/**
   * @brief  Button-triggered torque test mode
   *
   * When set to 1, pressing the blue user button (PC13) applies a fixed
@@ -72,6 +84,16 @@ extern "C" {
   * Set to 0 for normal SPI-controlled operation.
   */
 #define TEST_MODE_TORQUE_BUTTON     0
+
+/**
+  * @brief  Automatic motor initialization on boot
+  *
+  * When set to 1, the motor starts automatically after Pendulum_Init()
+  * without requiring user button press. Useful when Pi controls startup.
+  *
+  * When set to 0, motor requires user button press to start.
+  */
+#define AUTO_MOTOR_INIT             1
 
 /*******************************************************************************
  * Motor Velocity Calculation
@@ -103,7 +125,7 @@ extern "C" {
   *
   * Example: With divisor=2, internal velocity of 1000 counts/s outputs as 500
   */
-#define MOTOR_VEL_RESOLUTION_DIV    2
+#define MOTOR_VEL_RESOLUTION_DIV    4
 #define PEND_VEL_RESOLUTION_DIV     1
 
 /*******************************************************************************
@@ -118,21 +140,23 @@ extern "C" {
  ******************************************************************************/
 
 /**
-  * @brief  Window 1: Short burst limit (0.25 rev, 400 RPM)
+  * @brief  Window 1: Short burst limit (0.25 rev, 300 RPM)
   *
-  * Allows brief high-speed bursts. Triggers fault if 400+ RPM sustained
+  * Allows brief high-speed bursts. Triggers fault if 300+ RPM sustained
   * for 0.25 revolutions (2048 counts).
+  * 300 RPM = 40960 cps
   */
-#define OVERSPEED1_THRESHOLD_CPS    54613
+#define OVERSPEED1_THRESHOLD_CPS    40960
 #define OVERSPEED1_WINDOW_REVS      0.25f
 
 /**
-  * @brief  Window 2: Sustained speed limit (0.5 rev, 200 RPM)
+  * @brief  Window 2: Sustained speed limit (0.5 rev, 150 RPM)
   *
-  * Limits average speed over longer distance. Triggers fault if 200+ RPM
+  * Limits average speed over longer distance. Triggers fault if 150+ RPM
   * sustained for 0.5 revolutions (4096 counts).
+  * 150 RPM = 20480 cps
   */
-#define OVERSPEED2_THRESHOLD_CPS    27307
+#define OVERSPEED2_THRESHOLD_CPS    20480
 #define OVERSPEED2_WINDOW_REVS      0.5f
 
 #ifdef __cplusplus

@@ -59,8 +59,8 @@ static uint8_t motor_start_retries = 0;
 /** Motor initialization status (1 = motor has reached RUN state after button press) */
 static uint8_t motor_initialized = 0;
 
-/** Special value to indicate motor not initialized (-9999) */
-#define TORQUE_NOT_INITIALIZED  (-9999)
+/** Special value to indicate motor not initialized (999) */
+#define TORQUE_NOT_INITIALIZED  (999)
 
 #if TEST_MODE_TORQUE_BUTTON
 /** Torque test mode variables (only when enabled) */
@@ -252,6 +252,40 @@ static uint8_t CheckOverspeed(void)
     return 0;
 }
 
+/**
+  * @brief  Process motor startup sequence
+  *
+  * Handles motor state transitions during startup. Can be called from
+  * STATE_START (before SPI) or STATE_CONTROL (after SPI sync).
+  *
+  * @retval 1 if motor reached RUN state, 0 otherwise
+  */
+static uint8_t ProcessMotorStartup(void)
+{
+    MCI_State_t motor_state = MC_GetSTMStateMotor1();
+
+    if (motor_state == RUN) {
+        /* Motor running - clear request and mark as initialized */
+        motor_start_requested = 0;
+        motor_start_retries = 0;
+        motor_initialized = 1;
+        return 1;
+    } else if (motor_state == FAULT_NOW || motor_state == FAULT_OVER) {
+        /* Clear fault and retry */
+        MC_AcknowledgeFaultMotor1();
+        motor_start_retries++;
+        if (motor_start_retries >= 3) {
+            motor_start_requested = 0;
+        }
+    } else if (motor_state == IDLE) {
+        /* Start motor */
+        MC_ProgramTorqueRampMotor1_F(0.0f, 0);
+        MC_StartMotor1();
+    }
+    /* else: motor is starting up (ALIGNMENT, etc.), wait */
+    return 0;
+}
+
 /*******************************************************************************
  * Public Functions
  ******************************************************************************/
@@ -292,6 +326,11 @@ void Pendulum_Init(void)
 #if DEBUG_PENDULUM_ENCODER
     /* Initialize debug timer */
     Chrono_Mark(&debug_timer);
+#endif
+
+#if AUTO_MOTOR_INIT
+    /* Request automatic motor start */
+    motor_start_requested = 1;
 #endif
 }
 
@@ -336,6 +375,11 @@ void StateMachine_Run(void)
     {
     /*------------------------------------------------------------------*/
     case STATE_START:
+        /* Process motor startup even before SPI sync (button or auto-init) */
+        if (motor_start_requested) {
+            ProcessMotorStartup();
+        }
+
 #if SKIP_SPI_WAIT
         /* Skip waiting for SPI and go directly to reading encoders */
         g_state = STATE_READ;
@@ -473,33 +517,40 @@ void StateMachine_Run(void)
     /*------------------------------------------------------------------*/
     case STATE_CONTROL:
     {
-        MCI_State_t motor_state = MC_GetSTMStateMotor1();
+#if DEBUG_MOTOR
+        /* Debug: Monitor motor state and faults */
+        static uint32_t last_debug_tick = 0;
+        static uint8_t last_motor_init = 0;
+        static MCI_State_t last_mc_state = IDLE;
+        uint32_t now_tick = HAL_GetTick();
+        MCI_State_t mc_state = MC_GetSTMStateMotor1();
+        uint16_t faults = MC_GetOccurredFaultsMotor1();
 
-        /* Handle button press - start motor (always available) */
+        /* Print on state change or every 500ms */
+        if (motor_initialized != last_motor_init ||
+            mc_state != last_mc_state ||
+            (now_tick - last_debug_tick) >= 500) {
+
+            snprintf(uart_tx_buf, sizeof(uart_tx_buf),
+                     "MC:%d init:%d flt:0x%04X req:%d\r\n",
+                     (int)mc_state, motor_initialized, faults, motor_start_requested);
+            UART_Print_Quick(uart_tx_buf);
+
+            last_debug_tick = now_tick;
+            last_motor_init = motor_initialized;
+            last_mc_state = mc_state;
+        }
+#endif
+
+        /* Handle motor startup (button or auto-init) */
         if (motor_start_requested) {
-            if (motor_state == RUN) {
-                /* Motor running - clear request and mark as initialized */
-                motor_start_requested = 0;
-                motor_start_retries = 0;
-                motor_initialized = 1;
+            if (ProcessMotorStartup()) {
 #if TEST_MODE_TORQUE_BUTTON
-                /* Start torque test */
+                /* Motor just started - begin torque test */
                 torque_test_active = 1;
                 torque_test_start_tick = HAL_GetTick();
 #endif
-            } else if (motor_state == FAULT_NOW || motor_state == FAULT_OVER) {
-                /* Clear fault and retry */
-                MC_AcknowledgeFaultMotor1();
-                motor_start_retries++;
-                if (motor_start_retries >= 3) {
-                    motor_start_requested = 0;
-                }
-            } else if (motor_state == IDLE) {
-                /* Start motor */
-                MC_ProgramTorqueRampMotor1_F(0.0f, 0);
-                MC_StartMotor1();
             }
-            /* else: motor is starting up (ALIGNMENT, etc.), wait */
         }
 
         /* Handle overspeed fault - force zero torque, clear when Pi sends zero */
@@ -603,6 +654,9 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
     }
 }
 
+/** Button debounce time in ms */
+#define BUTTON_DEBOUNCE_MS  200
+
 /**
   * @brief  Override the MC SDK Start/Stop button callback
   *
@@ -612,8 +666,25 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   */
 void UI_HandleStartStopButton_cb(void)
 {
-    /* Request motor start (torque test only if TEST_MODE_TORQUE_BUTTON=1) */
-    if (!motor_start_requested) {
+    static uint32_t last_press_tick = 0;
+    uint32_t now = HAL_GetTick();
+
+    /* Debounce: ignore presses within BUTTON_DEBOUNCE_MS of last press */
+    if ((now - last_press_tick) < BUTTON_DEBOUNCE_MS) {
+        return;
+    }
+    last_press_tick = now;
+
+    if (motor_initialized) {
+        /* Motor is running - stop it */
+        MC_StopMotor1();
+        motor_initialized = 0;
+        motor_start_requested = 0;
+#if TEST_MODE_TORQUE_BUTTON
+        torque_test_active = 0;
+#endif
+    } else if (!motor_start_requested) {
+        /* Motor not running - request start */
         motor_start_requested = 1;
         motor_start_retries = 0;
     }
