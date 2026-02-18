@@ -107,26 +107,33 @@ extern "C" {
 #define PEND_VEL_RESOLUTION_DIV     1
 
 /*******************************************************************************
- * Overspeed Safety Protection
+ * Dual Overspeed Protection
+ *
+ * Two independent windows for speed limiting:
+ * - Window 1: Short burst limit (allows brief high-speed bursts)
+ * - Window 2: Sustained speed limit (limits average speed over longer distance)
+ *
+ * Both trigger the same fault behavior (requires Pi to send zero torque to clear).
+ * 8192 counts/rev: RPM = cps * 60 / 8192
  ******************************************************************************/
 
 /**
-  * @brief  Overspeed threshold in counts/second
+  * @brief  Window 1: Short burst limit (0.25 rev, 400 RPM)
   *
-  * If average velocity exceeds this value, overspeed fault is triggered
-  * after OVERSPEED_REVOLUTIONS have passed.
-  *
-  * 8192 counts/rev, so 20000 cps = ~146 RPM
+  * Allows brief high-speed bursts. Triggers fault if 400+ RPM sustained
+  * for 0.25 revolutions (2048 counts).
   */
-#define OVERSPEED_THRESHOLD_CPS     20000
+#define OVERSPEED1_THRESHOLD_CPS    54613
+#define OVERSPEED1_WINDOW_REVS      0.25f
 
 /**
-  * @brief  Revolutions before overspeed fault triggers
+  * @brief  Window 2: Sustained speed limit (0.5 rev, 200 RPM)
   *
-  * Number of revolutions at overspeed before entering fault state.
-  * Can be fractional (e.g., 0.25 for quarter revolution).
+  * Limits average speed over longer distance. Triggers fault if 200+ RPM
+  * sustained for 0.5 revolutions (4096 counts).
   */
-#define OVERSPEED_REVOLUTIONS       0.25f
+#define OVERSPEED2_THRESHOLD_CPS    27307
+#define OVERSPEED2_WINDOW_REVS      0.5f
 
 #ifdef __cplusplus
 }

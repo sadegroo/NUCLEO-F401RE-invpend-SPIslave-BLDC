@@ -56,6 +56,12 @@ static int16_t torque_cmd_mNm = 0;
 static volatile uint8_t motor_start_requested = 0;
 static uint8_t motor_start_retries = 0;
 
+/** Motor initialization status (1 = motor has reached RUN state after button press) */
+static uint8_t motor_initialized = 0;
+
+/** Special value to indicate motor not initialized (-9999) */
+#define TORQUE_NOT_INITIALIZED  (-9999)
+
 #if TEST_MODE_TORQUE_BUTTON
 /** Torque test mode variables (only when enabled) */
 static volatile uint8_t torque_test_active = 0;
@@ -106,8 +112,9 @@ static VelocityCalc_t pend_vel_calc = {
 static int32_t motor_vel_last_delta = 0;
 #endif
 
-/** Overspeed detection */
-static int32_t overspeed_accumulator = 0;
+/** Overspeed detection - dual window */
+static int32_t overspeed1_accumulator = 0;  /* Short window (0.25 rev, 400 RPM) */
+static int32_t overspeed2_accumulator = 0;  /* Long window (0.5 rev, 200 RPM) */
 static uint8_t overspeed_fault_active = 0;
 
 #if DEBUG_PENDULUM_ENCODER
@@ -203,7 +210,12 @@ static int32_t CalcVelocity(VelocityCalc_t *vc, uint32_t cnt)
 }
 
 /**
-  * @brief  Check for overspeed condition and trigger fault if needed
+  * @brief  Check for overspeed condition using dual windows
+  *
+  * Two independent checks:
+  * - Window 1: Short burst (0.25 rev at 400+ RPM)
+  * - Window 2: Sustained (0.5 rev at 200+ RPM)
+  *
   * @note   Uses motor_vel_calc.vel_filtered for smooth overspeed detection
   * @retval 1 if overspeed fault triggered, 0 otherwise
   */
@@ -211,21 +223,32 @@ static uint8_t CheckOverspeed(void)
 {
     int32_t vel_cps = (int32_t)motor_vel_calc.vel_filtered;
     int32_t abs_vel = (vel_cps < 0) ? -vel_cps : vel_cps;
+    int32_t counts_per_sample = abs_vel / 1000;  /* 1kHz sample rate */
 
-    if (abs_vel > OVERSPEED_THRESHOLD_CPS) {
-        /* Accumulate counts: vel (counts/sec) / 1000 (samples/sec) = counts/sample */
-        overspeed_accumulator += abs_vel / 1000;
-
-        /* Check if threshold revolutions exceeded */
-        int32_t threshold_counts = (int32_t)(OVERSPEED_REVOLUTIONS * MOTOR_ENCODER_CPR);
-        if (overspeed_accumulator >= threshold_counts) {
+    /* Window 1: Short burst limit (0.25 rev, 400 RPM) */
+    if (abs_vel > OVERSPEED1_THRESHOLD_CPS) {
+        overspeed1_accumulator += counts_per_sample;
+        int32_t threshold1 = (int32_t)(OVERSPEED1_WINDOW_REVS * MOTOR_ENCODER_CPR);
+        if (overspeed1_accumulator >= threshold1) {
             overspeed_fault_active = 1;
             return 1;
         }
     } else {
-        /* Below threshold - reset accumulator */
-        overspeed_accumulator = 0;
+        overspeed1_accumulator = 0;
     }
+
+    /* Window 2: Sustained speed limit (0.5 rev, 200 RPM) */
+    if (abs_vel > OVERSPEED2_THRESHOLD_CPS) {
+        overspeed2_accumulator += counts_per_sample;
+        int32_t threshold2 = (int32_t)(OVERSPEED2_WINDOW_REVS * MOTOR_ENCODER_CPR);
+        if (overspeed2_accumulator >= threshold2) {
+            overspeed_fault_active = 1;
+            return 1;
+        }
+    } else {
+        overspeed2_accumulator = 0;
+    }
+
     return 0;
 }
 
@@ -353,17 +376,14 @@ void StateMachine_Run(void)
         /* Calculate motor velocity using generic velocity calculator */
         int32_t motor_vel_raw = CalcVelocity(&motor_vel_calc, __HAL_TIM_GET_COUNTER(&htim2));
 
-        /* Check overspeed (uses motor_vel_calc.vel_filtered internally) */
-        if (CheckOverspeed()) {
-            g_state = STATE_ERROR;
-            break;
-        }
+        /* Check overspeed - sets flag but doesn't interrupt state machine */
+        CheckOverspeed();
 
         /* Scale down and convert to int16 for SPI */
         int16_t motor_vel = (int16_t)(motor_vel_raw / MOTOR_VEL_RESOLUTION_DIV);
 
-        /* Get measured motor torque */
-        int16_t measured_torque = GetMeasuredTorque();
+        /* Get measured motor torque - use special value if motor not initialized */
+        int16_t measured_torque = motor_initialized ? GetMeasuredTorque() : TORQUE_NOT_INITIALIZED;
 
         /* Pack TX buffer with big-endian data (10 bytes) */
         int16_t ppos_be = swap16((int16_t)pendulum_enc.position_steps);
@@ -458,9 +478,10 @@ void StateMachine_Run(void)
         /* Handle button press - start motor (always available) */
         if (motor_start_requested) {
             if (motor_state == RUN) {
-                /* Motor running - clear request */
+                /* Motor running - clear request and mark as initialized */
                 motor_start_requested = 0;
                 motor_start_retries = 0;
+                motor_initialized = 1;
 #if TEST_MODE_TORQUE_BUTTON
                 /* Start torque test */
                 torque_test_active = 1;
@@ -479,6 +500,19 @@ void StateMachine_Run(void)
                 MC_StartMotor1();
             }
             /* else: motor is starting up (ALIGNMENT, etc.), wait */
+        }
+
+        /* Handle overspeed fault - force zero torque, clear when Pi sends zero */
+        if (overspeed_fault_active) {
+            if (torque_cmd_mNm == 0) {
+                /* Pi acknowledged fault by sending zero - clear fault */
+                overspeed_fault_active = 0;
+                overspeed1_accumulator = 0;
+                overspeed2_accumulator = 0;
+            } else {
+                /* Force zero torque while fault is active */
+                torque_cmd_mNm = 0;
+            }
         }
 
 #if TEST_MODE_TORQUE_BUTTON
@@ -503,24 +537,8 @@ void StateMachine_Run(void)
 
     /*------------------------------------------------------------------*/
     case STATE_ERROR:
-        /* Error state - stop motor */
+        /* Reserved for future critical errors that require full stop */
         ApplyTorqueCommand(0);
-
-        /* Can only exit overspeed fault when SPI sends zero torque command */
-        if (spi_txrx_flag) {
-            spi_txrx_flag = 0;
-            int16_t cmd_be;
-            memcpy(&cmd_be, &spi_rx_buf[0], 2);
-            int16_t received_torque = swap16(cmd_be);
-
-            if (received_torque == 0 && overspeed_fault_active) {
-                /* Reset fault and return to normal operation */
-                overspeed_fault_active = 0;
-                overspeed_accumulator = 0;
-                g_state = STATE_READ;
-                Chrono_Mark(&cycle_timer);
-            }
-        }
         break;
 
     /*------------------------------------------------------------------*/
