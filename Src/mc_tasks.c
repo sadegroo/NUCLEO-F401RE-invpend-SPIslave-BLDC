@@ -103,7 +103,9 @@ __weak void MCboot( MCI_Handle_t* pMCIList[NBR_OF_MOTORS] )
     pMCIList[M1] = &Mci[M1];
     FOC_Init();
 
-    ASPEP_start(&aspepOverUartA);
+    /* ASPEP disabled - uses __disable_irq() which can cause MC_DURATION faults
+     * Enable only if MC Workbench monitoring is needed */
+    // ASPEP_start(&aspepOverUartA);
     /* USER CODE BEGIN MCboot 1 */
 
     /* USER CODE END MCboot 1 */
@@ -184,6 +186,9 @@ __weak void MC_RunMotorControlTasks(void)
       /* Applicative hook at end of Medium Frequency for Motor 1 */
       MC_APP_PostMediumFrequencyHook_M1();
 
+      /* MCP/ASPEP packet processing disabled - uses __disable_irq() which can cause MC_DURATION faults
+       * Enable only if MC Workbench monitoring is needed */
+#if 0
       MCP_Over_UartA.rxBuffer = MCP_Over_UartA.pTransportLayer->fRXPacketProcess(MCP_Over_UartA.pTransportLayer,
                                                                                 &MCP_Over_UartA.rxLength);
       if ( 0U == MCP_Over_UartA.rxBuffer)
@@ -207,6 +212,7 @@ __weak void MC_RunMotorControlTasks(void)
           /* No buffer available to build the answer ... should not occur */
         }
       }
+#endif
 
       /* USER CODE BEGIN MC_Scheduler 1 */
 

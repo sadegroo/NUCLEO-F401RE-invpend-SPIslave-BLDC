@@ -72,7 +72,7 @@ extern "C" {
   * Output format: MC:<state> init:<0/1> flt:0x<hex> req:<0/1>
   * States: 0=IDLE, 4=ALIGNMENT, 6=RUN, 10=FAULT_NOW, 11=FAULT_OVER
   */
-#define DEBUG_MOTOR                 1
+#define DEBUG_MOTOR                 0
 
 /**
   * @brief  Button-triggered torque test mode

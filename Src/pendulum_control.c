@@ -442,14 +442,17 @@ void StateMachine_Run(void)
         int16_t mvel_be = swap16(motor_vel);
         int16_t mtorq_be = swap16(measured_torque);
 
-        /* Disable interrupts briefly to ensure atomic buffer update */
-        __disable_irq();
+        /* Block only SPI DMA interrupts (priority 3+), allow FOC (priority 2) to continue
+         * BASEPRI = 0x30 blocks priority 3+ (lower priority), allows 0-2 (higher priority)
+         * This prevents MC_DURATION faults from IRQ disable during buffer update */
+        uint32_t basepri_backup = __get_BASEPRI();
+        __set_BASEPRI(0x30);  /* Block priority 3+ only */
         memcpy(&spi_tx_buf[0], &ppos_be, 2);
         memcpy(&spi_tx_buf[2], &pvel_be, 2);
         memcpy(&spi_tx_buf[4], &mpos_be, 2);
         memcpy(&spi_tx_buf[6], &mvel_be, 2);
         memcpy(&spi_tx_buf[8], &mtorq_be, 2);
-        __enable_irq();
+        __set_BASEPRI(basepri_backup);
 
 #if DEBUG_PENDULUM_ENCODER
         /* Periodically print debug info to UART (short timeout) */
